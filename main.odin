@@ -4,6 +4,10 @@ import rl "vendor:raylib"
 import "core:math"
 import "core:fmt"
 import "core:slice"
+import "core:mem"
+import "core:strings"
+
+// ---------------------------- Vector 2 stuff ----------------------------
 
 v2 :: rl.Vector2
 
@@ -11,13 +15,16 @@ format_v2 :: proc(v : v2) -> string {
     return fmt.aprint("[%f, %f]", v.x, v.y)
 }
 
+tile_size :: 64;
+fps :: 60
 width: i32 = 800;
 height: i32 = 600;
-fps :: 60
+
+// ---------------------------- Screen Initialization ----------------------------
 
 // initializes the display with some default values
 init_display :: proc(fullscreen : bool) {
-    rl.InitWindow(width, height, "Hello, raylib!")
+    rl.InitWindow(width, height, "RTS?")
     rl.SetTargetFPS(fps)
     if !fullscreen {
         return
@@ -28,154 +35,38 @@ init_display :: proc(fullscreen : bool) {
     height = rl.GetMonitorHeight(monitor)
     rl.SetWindowSize(width, height)
     rl.SetWindowPosition(0,0)
-    rl.SetTargetFPS(60)
+    rl.ToggleFullscreen()
 }
 
-Tower :: struct {
-    pos: v2,
-    hitbox : v2,
-    health : i32,
-    level : i32,
-    attack_delay : i32,
-    attack_timer : i32,
-}
 
-DefaultTower :: Tower {
-    pos = v2{0,0},
-    hitbox = v2{64,64},
-    health = 10,
-    level = 1,
-    attack_delay = 10,
-    attack_timer = 0,
-}
+// ---------------------------- Camera and space transforms ----------------------------
 
-place_tower :: proc(tower : Tower) {
-    append(&state.towers, tower)
-    y_sort_towers()
-    log(LOG_LEVEL.INFO, fmt.aprintf("placed tower at: %s", format_v2(tower.pos)))
-}
-
-draw_tower :: proc(tower : Tower) {
-    pos := world_pos_to_screen_pos(tower.pos)
-    if tower.health <= 0 {
-        rl.DrawTextureV(state.tower_texture, pos, rl.RED)
-    } else {
-        rl.DrawTextureV(state.tower_texture, pos, rl.WHITE)
-    }
-}
-
-y_sort_towers :: proc() {
-    sort_by_y :: proc(a, b : Tower) -> bool {
-        if a == (Tower{}) {
-            return true
-        }
-        if b == (Tower{}) {
-            return false
-        }
-        return a.pos.y < b.pos.y
-    }
-
-    slice.sort_by(state.towers[:], sort_by_y)
-}
-
-closest_tower :: proc(origin : v2) -> ^Tower {
-    if len(state.towers) == 0 {
-        return nil
-    }
-
-    best : ^Tower = &state.towers[0]
-    min_dist := rl.Vector2Length(state.towers[0].pos - origin + state.towers[0].hitbox/2)
-    for &tower in state.towers[1:] {
-        dist := rl.Vector2Length(tower.pos - origin + tower.hitbox/2)
-        if (dist < min_dist) {
-            min_dist = dist
-            best = &tower
-        }
-    }
-
-    return best
-}
-
-Enemy :: struct {
+Camera :: struct {
     pos : v2,
-    hitbox : v2,
-    vel : f32,
-    health : i32,
-    damage : i32,
-    level : i32,
-    attack_delay : i32,
-    attack_timer : i32,
-    target : ^Tower,
+    zoom : f32,
 }
 
-DefaultEnemy :: Enemy {
-    pos = v2{0,0},
-    vel = 2.0,
-    hitbox = v2{64,64},
-    health = 10,
-    damage = 1,
-    level =  1,
-    attack_delay = 10,
-    attack_timer = 0,
-    target = nil,
+screen_pos_to_world_pos :: proc(pos : v2) -> v2 {
+    screen_center := v2{f32(width/2), f32(height/2)}
+    lc := state.camera.pos - (screen_center / state.camera.zoom)
+    return lc + (pos / state.camera.zoom)
 }
 
-update_enemy :: proc(enemy : ^Enemy) {
-    if enemy.attack_timer > 0 {
-        enemy.attack_timer -= 1
-    }
-
-    if enemy.target == nil {
-        return
-    }
-
-    diff := enemy.target.pos - enemy.pos
-    tower_radius := rl.Vector2Length(enemy.target.hitbox)/2
-    if rl.Vector2Length(diff) < tower_radius {
-        // attack
-        if enemy.attack_timer == 0 {
-            enemy.attack_timer = enemy.attack_delay
-            enemy.target.health -= enemy.damage
-            if enemy.target.health <= 0 {
-                enemy.target = nil
-            }
-        }
-
-        return
-    }
-
-    diff = rl.Vector2Normalize(diff)
-
-    enemy.pos += diff*enemy.vel
+world_pos_to_screen_pos :: proc(pos: v2) -> v2 {
+    screen_center := v2{f32(width/2), f32(height/2)}
+    diff := pos - state.camera.pos
+    return screen_center + (diff * state.camera.zoom)
 }
 
-place_enemy :: proc(enemy : Enemy) {
-    append(&state.enemies, enemy)
-    y_sort_enemies()
-    log(LOG_LEVEL.INFO, fmt.aprintf("placed enemy at: %s", format_v2(enemy.pos)))
+snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
+    return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
 }
 
-draw_enemy :: proc(enemy: Enemy) {
-    pos := world_pos_to_screen_pos(enemy.pos)
-    rl.DrawTextureV(state.enemy_texture, pos, rl.WHITE)
-}
-
-y_sort_enemies :: proc() {
-    sort_by_y :: proc(a, b : Enemy) -> bool {
-        if a == (Enemy{}) {
-            return true
-        }
-        if b == (Enemy{}) {
-            return false
-        }
-        return a.pos.y < b.pos.y
-    }
-
-    slice.sort_by(state.enemies[:], sort_by_y)
-}
+// ---------------------------- Game state ----------------------------
 
 GameState :: struct {
-    camera_pos : v2,
+    camera : Camera,
+
     towers : [dynamic]Tower,
     tower_texture : rl.Texture2D,
 
@@ -184,8 +75,11 @@ GameState :: struct {
 }
 
 state := GameState {
-        camera_pos = v2{0,0},
-        towers = [dynamic]Tower{},
+    camera = Camera {
+        pos = v2{0,0},
+        zoom = 1.0,
+    },
+    towers = [dynamic]Tower{},
 }
 
 init_assets :: proc() {
@@ -193,28 +87,14 @@ init_assets :: proc() {
     state.enemy_texture = rl.LoadTexture("./enemy.png")
 }
 
-screen_pos_to_world_pos :: proc(pos : v2) -> v2 {
-    diff := v2{f32(width/2), f32(height/2)}
-    lc := state.camera_pos - diff
-    return lc + pos
-}
-
-world_pos_to_screen_pos :: proc(pos : v2) -> v2 {
-    diff := v2{f32(width/2), f32(height/2)}
-    lc := state.camera_pos - diff
-    return pos - lc
-}
-
-snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
-    return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
-}
+// ---------------------------- Input handling ----------------------------
 
 handle_keys :: proc() {
     if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-        tower := DefaultTower
+        tower := DefaultTower()
         mouse_pos := rl.GetMousePosition()
         world_space_pos := screen_pos_to_world_pos(mouse_pos)
-        tower.pos = snap_to_grid(world_space_pos, 64)
+        tower.pos = snap_to_grid(world_space_pos, tile_size)
         place_tower(tower)
     }
 
@@ -227,7 +107,40 @@ handle_keys :: proc() {
         enemy.target = closest_tower(enemy.pos + diff)
         place_enemy(enemy)
     }
+
+    {
+        screen_center := v2{f32(width/2), f32(height/2)}
+        wm := rl.GetMouseWheelMove()
+        zoom_speed : f32 = 0.1
+        min_zoom : f32 = 0.1
+        if wm != 0 {
+            if state.camera.zoom+wm*zoom_speed > min_zoom {
+                state.camera.zoom += wm * zoom_speed
+            }
+        }
+    }
+
+    {
+        diff := v2{0,0}
+        if rl.IsKeyDown(rl.KeyboardKey.W) {
+            diff.y -= 1
+        }
+        if rl.IsKeyDown(rl.KeyboardKey.S) {
+            diff.y += 1
+
+        }
+        if rl.IsKeyDown(rl.KeyboardKey.A) {
+            diff.x -= 1
+        }
+        if rl.IsKeyDown(rl.KeyboardKey.D) {
+            diff.x += 1
+        }
+
+        state.camera.pos += rl.Vector2Normalize(diff) * 5
+    }
 }
+
+// ---------------------------- Game update ----------------------------
 
 update :: proc() {
     for &enemy in state.enemies {
@@ -235,9 +148,19 @@ update :: proc() {
     }
 }
 
+// ---------------------------- Rendering ----------------------------
+
+highlight_tile :: proc(pos : v2) {
+    world_pos := screen_pos_to_world_pos(pos)
+    world_pos_snapped := snap_to_grid(world_pos, tile_size)
+    rl.DrawRectangleV(world_pos_to_screen_pos(world_pos_snapped), v2{tile_size,tile_size} * state.camera.zoom, rl.Color{220,220,220,255})
+}
+
 draw :: proc() {
     rl.BeginDrawing()
     rl.ClearBackground(rl.WHITE)
+
+    highlight_tile(rl.GetMousePosition())
 
     for tower in state.towers {
         draw_tower(tower)
@@ -247,14 +170,33 @@ draw :: proc() {
         draw_enemy(enemy)
     }
 
-    rl.DrawText("tower defense test", 50, 50, 18, rl.BLACK)
+    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("FPS: %d", rl.GetFPS())), 50, 30, 18, rl.BLACK)
+
+    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera pos: [%f, %f]", state.camera.pos.x, state.camera.pos.y)), 50, 50, 18, rl.BLACK)
+    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera dist: [%f]", state.camera.zoom)), 50, 70, 18, rl.BLACK)
+
+    {
+        mouse_pos := rl.GetMousePosition()
+        mouse_world_pos := screen_pos_to_world_pos(mouse_pos)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse screen pos: [%f, %f]", mouse_pos.x, mouse_pos.y)), 50, 90, 18, rl.BLACK)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse world pos: [%f, %f]", mouse_world_pos.x, mouse_world_pos.y)), 50, 110, 18, rl.BLACK)
+    }
+
+    rl.DrawLine(width/2, 0, width/2, height, rl.BLACK)
+    rl.DrawLine(0, height/2, width, height/2, rl.BLACK)
 
     rl.EndDrawing()
 }
 
+// ---------------------------- Main loop ----------------------------
+
 main :: proc() {
-    init_display(false)
+    init_display(true)
     init_assets()
+
+    en := DefaultEnemy
+
+    place_enemy(en)
 
     log(LOG_LEVEL.INFO, "display initialized")
 

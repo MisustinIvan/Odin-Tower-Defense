@@ -9,7 +9,7 @@ LOG_LEVEL :: enum {
     ERROR,
 }
 
-log :: proc(lvl : LOG_LEVEL, msg : string) {
+log :: proc(lvl : LOG_LEVEL, msg : string, args : ..any) {
     prefix := ""
     switch lvl {
     case .INFO: prefix = "INFO"
@@ -18,5 +18,9 @@ log :: proc(lvl : LOG_LEVEL, msg : string) {
     }
 
     timestamp, _ := time.time_to_datetime(time.now())
-    fmt.printf("[%s] :: %02d:%02d:%02d :: %s\n", prefix, timestamp.hour, timestamp.minute, timestamp.second, msg)
+    if len(args) == 0 {
+        fmt.printf("[%s] :: %02d:%02d:%02d :: %s\n", prefix, timestamp.hour, timestamp.minute, timestamp.second, msg)
+    } else {
+        fmt.printf("[%s] :: %02d:%02d:%02d :: %s\n", prefix, timestamp.hour, timestamp.minute, timestamp.second, fmt.aprintf(msg, args))
+    }
 }
