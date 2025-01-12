@@ -1,59 +1,34 @@
 package main
 
-import rl "vendor:raylib"
-import "core:math"
-import "core:fmt"
 import "core:slice"
 import "core:mem"
+import "core:math"
+import "core:fmt"
 import "core:strings"
-
-// ---------------------------- Vector 2 stuff ----------------------------
-
-v2 :: rl.Vector2
-
-format_v2 :: proc(v : v2) -> string {
-    return fmt.aprint("[%f, %f]", v.x, v.y)
-}
+import rl "vendor:raylib"
 
 tile_size :: 64;
 fps :: 60
-width: i32 = 800;
-height: i32 = 600;
+default_width :: 800
+default_height :: 600
 
-// ---------------------------- Screen Initialization ----------------------------
-
-// initializes the display with some default values
-init_display :: proc(fullscreen : bool) {
-    rl.InitWindow(width, height, "RTS?")
-    rl.SetTargetFPS(fps)
-    if !fullscreen {
-        return
-    }
-
-    monitor := rl.GetCurrentMonitor()
-    width = rl.GetMonitorWidth(monitor)
-    height = rl.GetMonitorHeight(monitor)
-    rl.SetWindowSize(width, height)
-    rl.SetWindowPosition(0,0)
-    rl.ToggleFullscreen()
-}
-
-
-// ---------------------------- Camera and space transforms ----------------------------
+v2 :: rl.Vector2
 
 Camera :: struct {
+    fps : i32,
     pos : v2,
     zoom : f32,
+    screen_size : v2,
 }
 
 screen_pos_to_world_pos :: proc(pos : v2) -> v2 {
-    screen_center := v2{f32(width/2), f32(height/2)}
+    screen_center := state.camera.screen_size/2
     lc := state.camera.pos - (screen_center / state.camera.zoom)
     return lc + (pos / state.camera.zoom)
 }
 
 world_pos_to_screen_pos :: proc(pos: v2) -> v2 {
-    screen_center := v2{f32(width/2), f32(height/2)}
+    screen_center := state.camera.screen_size/2
     diff := pos - state.camera.pos
     return screen_center + (diff * state.camera.zoom)
 }
@@ -62,54 +37,55 @@ snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
     return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
 }
 
-// ---------------------------- Game state ----------------------------
-
 GameState :: struct {
+    alloc : mem.Allocator,
     camera : Camera,
-
-    towers : [dynamic]Tower,
-    tower_texture : rl.Texture2D,
-
-    enemies : [dynamic]Enemy,
-    enemy_texture : rl.Texture2D,
 }
 
-state := GameState {
-    camera = Camera {
+DefaultGameState :: proc() -> GameState {
+    return GameState{
+        camera = Camera {
+            pos = v2{0,0},
+            zoom = 1.0,
+        }
+    }
+}
+
+state : GameState
+
+init_game_state :: proc(alloc := context.allocator) {
+    state.camera = Camera {
         pos = v2{0,0},
         zoom = 1.0,
-    },
-    towers = [dynamic]Tower{},
-}
-
-init_assets :: proc() {
-    state.tower_texture = rl.LoadTexture("./tower.png")
-    state.enemy_texture = rl.LoadTexture("./enemy.png")
-}
-
-// ---------------------------- Input handling ----------------------------
-
-handle_keys :: proc() {
-    if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-        tower := DefaultTower()
-        mouse_pos := rl.GetMousePosition()
-        world_space_pos := screen_pos_to_world_pos(mouse_pos)
-        tower.pos = snap_to_grid(world_space_pos, tile_size)
-        place_tower(tower)
     }
 
-    if rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
-        enemy := DefaultEnemy
-        mouse_pos := rl.GetMousePosition()
-        world_space_pos := screen_pos_to_world_pos(mouse_pos)
-        diff := enemy.hitbox/2
-        enemy.pos = world_space_pos - diff
-        enemy.target = closest_tower(enemy.pos + diff)
-        place_enemy(enemy)
+    if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
+        state.camera.screen_size = v2{f32(default_width), f32(default_height)}
+    }
+    state.alloc = alloc
+}
+
+init_display :: proc(fullscreen : bool) {
+    rl.InitWindow(default_width, default_height, "RTS?")
+    rl.SetTargetFPS(fps)
+    if !fullscreen {
+        return
     }
 
+    monitor := rl.GetCurrentMonitor()
+    width := rl.GetMonitorWidth(monitor)
+    height := rl.GetMonitorHeight(monitor)
+
+    state.camera.screen_size.x = f32(width)
+    state.camera.screen_size.y = f32(height)
+    rl.SetWindowSize(width, height)
+    rl.SetWindowPosition(0,0)
+    rl.ToggleFullscreen()
+}
+
+handle_input :: proc() {
+    // camera zoom
     {
-        screen_center := v2{f32(width/2), f32(height/2)}
         wm := rl.GetMouseWheelMove()
         zoom_speed : f32 = 0.1
         min_zoom : f32 = 0.1
@@ -119,7 +95,7 @@ handle_keys :: proc() {
             }
         }
     }
-
+    // camera movement
     {
         diff := v2{0,0}
         if rl.IsKeyDown(rl.KeyboardKey.W) {
@@ -140,15 +116,9 @@ handle_keys :: proc() {
     }
 }
 
-// ---------------------------- Game update ----------------------------
-
 update :: proc() {
-    for &enemy in state.enemies {
-        update_enemy(&enemy)
-    }
+    handle_input()
 }
-
-// ---------------------------- Rendering ----------------------------
 
 highlight_tile :: proc(pos : v2) {
     world_pos := screen_pos_to_world_pos(pos)
@@ -156,20 +126,36 @@ highlight_tile :: proc(pos : v2) {
     rl.DrawRectangleV(world_pos_to_screen_pos(world_pos_snapped), v2{tile_size,tile_size} * state.camera.zoom, rl.Color{220,220,220,255})
 }
 
-draw :: proc() {
-    rl.BeginDrawing()
-    rl.ClearBackground(rl.WHITE)
+draw_world_grid :: proc() {
+    screen_size := state.camera.screen_size
+    top_left := screen_pos_to_world_pos(v2{0, 0})
+    bottom_right := screen_pos_to_world_pos(screen_size)
 
-    highlight_tile(rl.GetMousePosition())
+    start_x := math.floor(top_left.x / f32(tile_size))
+    start_y := math.floor(top_left.y / f32(tile_size))
+    end_x := math.ceil(bottom_right.x / f32(tile_size))
+    end_y := math.ceil(bottom_right.y / f32(tile_size))
 
-    for tower in state.towers {
-        draw_tower(tower)
+    col1 := rl.Color{180, 180, 180, 255}
+    col2 := rl.Color{200, 200, 200, 255}
+    for y in start_y..<end_y {
+        for x in start_x..<end_x {
+            world_pos := v2{f32(x) * f32(tile_size), f32(y) * f32(tile_size)}
+
+            screen_pos := world_pos_to_screen_pos(world_pos)
+
+            col : rl.Color
+            if i32(x + y) % 2 == 0 {
+                col = col1
+            } else {
+                col = col2
+            }
+            rl.DrawRectangleV(screen_pos, v2{f32(tile_size), f32(tile_size)} * state.camera.zoom, col)
+        }
     }
+}
 
-    for enemy in state.enemies {
-        draw_enemy(enemy)
-    }
-
+draw_debug_info :: proc() {
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("FPS: %d", rl.GetFPS())), 50, 30, 18, rl.BLACK)
 
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera pos: [%f, %f]", state.camera.pos.x, state.camera.pos.y)), 50, 50, 18, rl.BLACK)
@@ -182,26 +168,29 @@ draw :: proc() {
         rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse world pos: [%f, %f]", mouse_world_pos.x, mouse_world_pos.y)), 50, 110, 18, rl.BLACK)
     }
 
-    rl.DrawLine(width/2, 0, width/2, height, rl.BLACK)
-    rl.DrawLine(0, height/2, width, height/2, rl.BLACK)
+    rl.DrawLine(i32(state.camera.screen_size.x/2), 0, i32(state.camera.screen_size.x/2), i32(state.camera.screen_size.y), rl.BLACK)
+    rl.DrawLine(0, i32(state.camera.screen_size.y/2), i32(state.camera.screen_size.x), i32(state.camera.screen_size.y/2), rl.BLACK)
+}
+
+draw :: proc() {
+    rl.BeginDrawing()
+
+    rl.ClearBackground(rl.WHITE)
+
+    draw_world_grid()
+    highlight_tile(rl.GetMousePosition())
+    draw_debug_info()
 
     rl.EndDrawing()
 }
 
-// ---------------------------- Main loop ----------------------------
-
 main :: proc() {
-    init_display(true)
-    init_assets()
-
-    en := DefaultEnemy
-
-    place_enemy(en)
-
+    init_display(false)
     log(LOG_LEVEL.INFO, "display initialized")
+    init_game_state()
+    log(LOG_LEVEL.INFO, "game state initialized")
 
     for !rl.WindowShouldClose() {
-        handle_keys()
         update()
         draw()
     }
