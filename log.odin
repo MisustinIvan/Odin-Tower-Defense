@@ -24,7 +24,7 @@ log :: proc(lvl : LOG_LEVEL, msg : string, args : ..any) {
     if len(args) == 0 {
         msg_str = fmt.aprintf("[%s] :: %02d:%02d:%02d :: %s\n", prefix, timestamp.hour, timestamp.minute, timestamp.second, msg)
     } else {
-        msg_str = fmt.aprintf("[%s] :: %02d:%02d:%02d :: %s\n", prefix, timestamp.hour, timestamp.minute, timestamp.second, fmt.aprintf(msg, args))
+        msg_str = fmt.aprintf("[%s] :: %02d:%02d:%02d :: %s\n", prefix, timestamp.hour, timestamp.minute, timestamp.second, fmt.aprintf(msg, ..args))
     }
 
     if lvl == LOG_LEVEL.PANIC {

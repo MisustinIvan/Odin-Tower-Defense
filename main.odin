@@ -5,7 +5,10 @@ import "core:mem"
 import "core:math"
 import "core:fmt"
 import "core:strings"
+import "core:math/rand"
+import "core:math/noise"
 import rl "vendor:raylib"
+
 
 world_size :: 256
 tile_size :: 64;
@@ -38,6 +41,10 @@ snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
     return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
 }
 
+grid_position :: proc(pos : v2, grid_size : i32) -> v2 {
+    return v2{math.floor(pos.x / f32(grid_size)), math.floor(pos.y / f32(grid_size))}
+}
+
 Tower :: struct {
     pos : v2,
     hitbox : v2,
@@ -65,7 +72,13 @@ draw_tower :: proc(t : Tower) {
 place_tower :: proc(p : v2) {
     tower := DefaultTower
     tower.pos = snap_to_grid(p, tile_size)
-    append(&state.buildings, tower)
+
+    tower_grid_pos := grid_position(tower.pos, tile_size)
+    target_tile := state.world[i32(tower_grid_pos.y)][i32(tower_grid_pos.x)]
+    placeable := PlaceableTile
+    if placeable[target_tile.kind] {
+        append(&state.buildings, tower)
+    }
 }
 
 Wall :: struct {
@@ -110,12 +123,20 @@ draw_building :: proc(b : Building) {
 TextureAtlas :: struct {
     tower_texture : rl.Texture2D,
     enemy_texture : rl.Texture2D,
+    grass_texture : rl.Texture2D,
+    water_texture : rl.Texture2D,
+    forest_texture : rl.Texture2D,
+    rock_texture : rl.Texture2D,
 }
 
 init_texture_atlas :: proc() {
     atlas : TextureAtlas
     atlas.tower_texture = rl.LoadTexture("./tower.png")
     atlas.enemy_texture = rl.LoadTexture("./enemy.png")
+    atlas.grass_texture = rl.LoadTexture("./grass.png")
+    atlas.water_texture = rl.LoadTexture("./water.png")
+    atlas.forest_texture = rl.LoadTexture("./forest.png")
+    atlas.rock_texture = rl.LoadTexture("./rock.png")
     state.atlas = atlas
 }
 
@@ -124,13 +145,44 @@ deinit_texture_atlas :: proc() {
     rl.UnloadTexture(state.atlas.enemy_texture)
 }
 
+TileKind :: enum {
+    Grass,
+    Water,
+    Forest,
+    Rock,
+}
+
+PlaceableTile :: [TileKind]bool {
+    .Grass = true,
+    .Water = false,
+    .Forest = false,
+    .Rock = true,
+}
+
+Tile :: struct {
+    pos : v2,
+    kind : TileKind
+}
+
+draw_tile :: proc(t : Tile) {
+    texture : rl.Texture2D
+    switch t.kind {
+    case .Grass: texture = state.atlas.grass_texture
+    case .Water: texture = state.atlas.water_texture
+    case .Forest: texture = state.atlas.forest_texture
+    case .Rock: texture = state.atlas.rock_texture
+    }
+    rl.DrawTextureEx(texture, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.WHITE)
+}
+
 GameState :: struct {
     alloc : mem.Allocator,
     camera : Camera,
 
     atlas : TextureAtlas,
 
-    buildings : [dynamic]Building
+    buildings : [dynamic]Building,
+    world : ^[world_size][world_size]Tile
 }
 
 DefaultGameState :: proc() -> GameState {
@@ -144,6 +196,45 @@ DefaultGameState :: proc() -> GameState {
 
 state : GameState
 
+smoothstep :: proc(t : f32) -> f32 {
+    return t * t * t * (t * (t * 6 - 15) + 10)
+}
+
+lerp :: proc(a : f32, b : f32, t : f32) -> f32 {
+    return a + t * (b - a)
+}
+
+generate_perlin_noise :: proc(width, height : i32, scale : f32 = 1.0, alloc := context.allocator) -> []f32 {
+    result, err := make([]f32, width*height)
+    if err != .None {
+        log(.PANIC, "failed to allocate memory for noise")
+    }
+
+    seed := rand.int63()
+
+
+    for y in 0..<height {
+        for x in 0..<width {
+            coord := v2{f32(x),f32(y)}/scale
+            result[(y * width) + x] = (noise.noise_2d(seed, noise.Vec2{f64(coord.x), f64(coord.y)}) + 1.0) * 0.5
+        }
+    }
+
+    return result
+}
+
+noise_to_tile :: proc(val : f32) -> TileKind {
+    if val <= 0.1 {
+        return .Water
+    } else if val <= 0.7 {
+        return .Grass
+    } else if val <= 0.85 {
+        return .Forest
+    } else {
+        return .Rock
+    }
+}
+
 init_game_state :: proc(alloc := context.allocator) {
     state.camera = Camera {
         pos = v2{0,0},
@@ -152,6 +243,27 @@ init_game_state :: proc(alloc := context.allocator) {
 
     if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
         state.camera.screen_size = v2{f32(default_width), f32(default_height)}
+    }
+
+
+    size := size_of(Tile) * world_size * world_size
+    tiles_ptr, err := mem.alloc(size, mem.DEFAULT_ALIGNMENT, alloc)
+    if err != mem.Allocator_Error.None {
+        log(LOG_LEVEL.PANIC, "Failed to allocate memory for world")
+    }
+
+    state.world = cast(^[world_size][world_size]Tile)(tiles_ptr)
+
+    noise := generate_perlin_noise(world_size, world_size, 32)
+
+    for row, y in state.world {
+        for _, x in row {
+            tile := Tile{
+                kind = noise_to_tile(noise[(y*world_size) + x]),
+                pos = v2{f32(x), f32(y)} * f32(tile_size)
+            }
+            state.world[y][x] = tile
+        }
     }
 
     state.alloc = alloc
@@ -213,6 +325,29 @@ handle_input :: proc() {
         }
         if rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
             place_wall(screen_pos_to_world_pos(rl.GetMousePosition()))
+        }
+    }
+    // fullscreen toggle
+    {
+        if rl.IsKeyPressed(rl.KeyboardKey.F) {
+            if rl.IsWindowFullscreen() {
+                rl.ToggleFullscreen()
+                rl.SetWindowSize(default_width, default_height)
+                state.camera.screen_size.x = f32(default_width)
+                state.camera.screen_size.y = f32(default_height)
+                rl.SetWindowPosition(50,50)
+            } else {
+                monitor := rl.GetCurrentMonitor()
+                width := rl.GetMonitorWidth(monitor)
+                height := rl.GetMonitorHeight(monitor)
+
+                rl.SetWindowSize(width, height)
+                rl.SetWindowPosition(0,0)
+                rl.ToggleFullscreen()
+
+                state.camera.screen_size.x = f32(width)
+                state.camera.screen_size.y = f32(height)
+            }
         }
     }
 }
@@ -279,6 +414,12 @@ draw :: proc() {
     rl.ClearBackground(rl.WHITE)
 
     draw_world_grid()
+
+    for row in state.world {
+        for tile in row {
+            draw_tile(tile)
+        }
+    }
 
     for b in state.buildings {
         draw_building(b)
