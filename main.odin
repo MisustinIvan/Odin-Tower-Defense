@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:strings"
 import rl "vendor:raylib"
 
+world_size :: 256
 tile_size :: 64;
 fps :: 60
 default_width :: 800
@@ -37,9 +38,99 @@ snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
     return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
 }
 
+Tower :: struct {
+    pos : v2,
+    hitbox : v2,
+    health : i32,
+    max_health : i32,
+}
+
+DefaultTower :: Tower {
+    pos = v2{0,0},
+    hitbox = v2{f32(tile_size),f32(tile_size)},
+    health = 100,
+    max_health = 100,
+}
+
+draw_tower :: proc(t : Tower) {
+    pos := world_pos_to_screen_pos(t.pos)
+    if t.health <= 0 {
+        rl.DrawTextureEx(state.atlas.tower_texture, pos, 0.0, state.camera.zoom, rl.RED)
+    } else {
+        rl.DrawTextureEx(state.atlas.tower_texture, pos, 0.0, state.camera.zoom, rl.WHITE)
+    }
+}
+
+// takes a position in world space not snapped
+place_tower :: proc(p : v2) {
+    tower := DefaultTower
+    tower.pos = snap_to_grid(p, tile_size)
+    append(&state.buildings, tower)
+}
+
+Wall :: struct {
+    pos : v2,
+    hitbox : v2,
+    health : v2,
+    max_health : i32,
+}
+
+DefaultWall :: Wall {
+    pos = v2{0,0},
+    hitbox = v2{f32(tile_size),f32(tile_size)},
+    health = 100,
+    max_health = 100,
+}
+
+draw_wall :: proc(t : Wall) {
+    pos := world_pos_to_screen_pos(t.pos)
+    col := rl.Color{255,0,255,255}
+    rl.DrawRectangleV(pos, t.hitbox*state.camera.zoom, col)
+}
+
+// takes a position in world space not snapped
+place_wall :: proc(p : v2) {
+    wall := DefaultWall
+    wall.pos = snap_to_grid(p, tile_size)
+    append(&state.buildings, wall)
+}
+
+Building :: union {
+    Tower,
+    Wall,
+}
+
+draw_building :: proc(b : Building) {
+    switch b in b {
+    case Tower: draw_tower(b)
+    case Wall: draw_wall(b)
+    }
+}
+
+TextureAtlas :: struct {
+    tower_texture : rl.Texture2D,
+    enemy_texture : rl.Texture2D,
+}
+
+init_texture_atlas :: proc() {
+    atlas : TextureAtlas
+    atlas.tower_texture = rl.LoadTexture("./tower.png")
+    atlas.enemy_texture = rl.LoadTexture("./enemy.png")
+    state.atlas = atlas
+}
+
+deinit_texture_atlas :: proc() {
+    rl.UnloadTexture(state.atlas.tower_texture)
+    rl.UnloadTexture(state.atlas.enemy_texture)
+}
+
 GameState :: struct {
     alloc : mem.Allocator,
     camera : Camera,
+
+    atlas : TextureAtlas,
+
+    buildings : [dynamic]Building
 }
 
 DefaultGameState :: proc() -> GameState {
@@ -62,6 +153,7 @@ init_game_state :: proc(alloc := context.allocator) {
     if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
         state.camera.screen_size = v2{f32(default_width), f32(default_height)}
     }
+
     state.alloc = alloc
 }
 
@@ -112,7 +204,16 @@ handle_input :: proc() {
             diff.x += 1
         }
 
-        state.camera.pos += rl.Vector2Normalize(diff) * 5
+        state.camera.pos += rl.Vector2Normalize(diff) * 10 / state.camera.zoom
+    }
+    // placing buildings
+    {
+        if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+            place_tower(screen_pos_to_world_pos(rl.GetMousePosition()))
+        }
+        if rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
+            place_wall(screen_pos_to_world_pos(rl.GetMousePosition()))
+        }
     }
 }
 
@@ -123,7 +224,7 @@ update :: proc() {
 highlight_tile :: proc(pos : v2) {
     world_pos := screen_pos_to_world_pos(pos)
     world_pos_snapped := snap_to_grid(world_pos, tile_size)
-    rl.DrawRectangleV(world_pos_to_screen_pos(world_pos_snapped), v2{tile_size,tile_size} * state.camera.zoom, rl.Color{220,220,220,255})
+    rl.DrawRectangleV(world_pos_to_screen_pos(world_pos_snapped), v2{tile_size,tile_size} * state.camera.zoom, rl.Color{220,220,220,120})
 }
 
 draw_world_grid :: proc() {
@@ -178,6 +279,11 @@ draw :: proc() {
     rl.ClearBackground(rl.WHITE)
 
     draw_world_grid()
+
+    for b in state.buildings {
+        draw_building(b)
+    }
+
     highlight_tile(rl.GetMousePosition())
     draw_debug_info()
 
@@ -189,6 +295,9 @@ main :: proc() {
     log(LOG_LEVEL.INFO, "display initialized")
     init_game_state()
     log(LOG_LEVEL.INFO, "game state initialized")
+    init_texture_atlas()
+    log(LOG_LEVEL.INFO, "texture atlas initialized")
+    defer deinit_texture_atlas()
 
     for !rl.WindowShouldClose() {
         update()
