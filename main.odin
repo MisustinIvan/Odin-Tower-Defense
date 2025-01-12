@@ -269,6 +269,10 @@ init_game_state :: proc(alloc := context.allocator) {
     state.alloc = alloc
 }
 
+deinit_game_state :: proc() {
+    mem.free_all(state.alloc)
+}
+
 init_display :: proc(fullscreen : bool) {
     rl.InitWindow(default_width, default_height, "RTS?")
     rl.SetTargetFPS(fps)
@@ -434,8 +438,11 @@ draw :: proc() {
 main :: proc() {
     init_display(false)
     log(LOG_LEVEL.INFO, "display initialized")
+
     init_game_state()
     log(LOG_LEVEL.INFO, "game state initialized")
+    defer deinit_game_state()
+
     init_texture_atlas()
     log(LOG_LEVEL.INFO, "texture atlas initialized")
     defer deinit_texture_atlas()
