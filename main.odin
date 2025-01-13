@@ -139,7 +139,10 @@ draw_building :: proc(b : Building) {
 TextureAtlas :: struct {
     tower_texture : rl.Texture2D,
     enemy_texture : rl.Texture2D,
-    grass_texture : rl.Texture2D,
+    grass_texture_0 : rl.Texture2D,
+    grass_texture_1 : rl.Texture2D,
+    grass_texture_2 : rl.Texture2D,
+    grass_texture_3 : rl.Texture2D,
     water_texture : rl.Texture2D,
     forest_texture : rl.Texture2D,
     rock_texture : rl.Texture2D,
@@ -150,7 +153,10 @@ init_texture_atlas :: proc() {
     atlas : TextureAtlas
     atlas.tower_texture = rl.LoadTexture("./tower.png")
     atlas.enemy_texture = rl.LoadTexture("./enemy.png")
-    atlas.grass_texture = rl.LoadTexture("./grass.png")
+    atlas.grass_texture_0 = rl.LoadTexture("./grass_0.png")
+    atlas.grass_texture_1 = rl.LoadTexture("./grass_1.png")
+    atlas.grass_texture_2 = rl.LoadTexture("./grass_2.png")
+    atlas.grass_texture_3 = rl.LoadTexture("./grass_3.png")
     atlas.water_texture = rl.LoadTexture("./water.png")
     atlas.forest_texture = rl.LoadTexture("./forest.png")
     atlas.rock_texture = rl.LoadTexture("./rock.png")
@@ -161,6 +167,14 @@ init_texture_atlas :: proc() {
 deinit_texture_atlas :: proc() {
     rl.UnloadTexture(state.atlas.tower_texture)
     rl.UnloadTexture(state.atlas.enemy_texture)
+    rl.UnloadTexture(state.atlas.grass_texture_0)
+    rl.UnloadTexture(state.atlas.grass_texture_1)
+    rl.UnloadTexture(state.atlas.grass_texture_2)
+    rl.UnloadTexture(state.atlas.grass_texture_3)
+    rl.UnloadTexture(state.atlas.water_texture)
+    rl.UnloadTexture(state.atlas.forest_texture)
+    rl.UnloadTexture(state.atlas.rock_texture)
+    rl.UnloadTexture(state.atlas.wall_texture)
 }
 
 TileKind :: enum {
@@ -180,19 +194,13 @@ PlaceableTile :: [TileKind]bool {
 Tile :: struct {
     pos : v2,
     kind : TileKind,
+    texture : ^rl.Texture2D,
     shade: f32
 }
 
 draw_tile :: proc(t : Tile) {
-    texture : rl.Texture2D
-    switch t.kind {
-    case .Grass: texture = state.atlas.grass_texture
-    case .Water: texture = state.atlas.water_texture
-    case .Forest: texture = state.atlas.forest_texture
-    case .Rock: texture = state.atlas.rock_texture
-    }
     a := u8(255.0 * t.shade)
-    rl.DrawTextureEx(texture, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
+    rl.DrawTextureEx(t.texture^, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
 }
 
 InteractState :: enum {
@@ -303,8 +311,23 @@ init_game_state :: proc(alloc := context.allocator) {
                 pos = v2{f32(x), f32(y)} * f32(tile_size)
             }
 
-            if kind == .Rock {
+            switch kind {
+            case.Grass: {
+                grass_textures_choice := []^rl.Texture2D{&state.atlas.grass_texture_0, &state.atlas.grass_texture_1, &state.atlas.grass_texture_2, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3}
+                tile.texture = rand.choice(grass_textures_choice)
+                tile.shade = 0.98+(rand.float32()*0.02)
+            }
+            case.Rock: {
+                tile.texture = &state.atlas.rock_texture
                 tile.shade = (1.0 - noise[(y*world_size) + x])/0.25
+            }
+            case.Water: {
+                tile.texture = &state.atlas.water_texture
+                tile.shade = (1.0 - (0.1 - noise[(y*world_size)+x]))
+            }
+            case.Forest: {
+                tile.texture = &state.atlas.forest_texture
+            }
             }
 
             state.world[y][x] = tile
