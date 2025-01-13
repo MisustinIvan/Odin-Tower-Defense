@@ -195,6 +195,11 @@ draw_tile :: proc(t : Tile) {
     rl.DrawTextureEx(texture, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
 }
 
+InteractState :: enum {
+    None,
+    Building,
+}
+
 GameState :: struct {
     alloc : mem.Allocator,
     camera : Camera,
@@ -205,6 +210,8 @@ GameState :: struct {
     world : ^[world_size][world_size]Tile,
 
     selected_building : Building,
+
+    interact_state : InteractState,
 
     debug : bool,
 }
@@ -267,6 +274,8 @@ init_game_state :: proc(alloc := context.allocator) {
 
     state.selected_building = Tower{}
 
+    state.interact_state = .None
+
     state.debug = false
 
     if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
@@ -328,6 +337,16 @@ init_display :: proc(fullscreen : bool) {
 }
 
 handle_input :: proc() {
+    // interact state toggling
+    {
+        if rl.IsKeyPressed(rl.KeyboardKey.B) {
+            if state.interact_state == .None {
+                state.interact_state = .Building
+            } else {
+                state.interact_state = .None
+            }
+        }
+    }
     // debug toggling
     {
         if rl.IsKeyPressed(rl.KeyboardKey.GRAVE) {
@@ -368,8 +387,10 @@ handle_input :: proc() {
     }
     // placing buildings
     {
-        if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-            place_building(state.selected_building, screen_pos_to_world_pos(rl.GetMousePosition()))
+        if state.interact_state == .Building {
+            if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+                place_building(state.selected_building, screen_pos_to_world_pos(rl.GetMousePosition()))
+            }
         }
 
         // changing selected building
@@ -463,9 +484,14 @@ draw_debug_info :: proc() {
 draw_gui :: proc() {
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", building_string(state.selected_building))), 50, i32(state.camera.screen_size.y) - 50, 18, rl.BLACK)
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECT BUILDING <1 ... %d>", building_types)), 50, i32(state.camera.screen_size.y) - 70, 18, rl.BLACK)
+
+    accent := rl.WHITE
+    if state.interact_state != .Building {
+        accent = rl.RED
+    }
     switch b in state.selected_building {
-    case Tower: rl.DrawTextureV(state.atlas.tower_texture, v2{50, state.camera.screen_size.y - 80 - f32(tile_size)}, rl.WHITE)
-    case Wall: rl.DrawTextureV(state.atlas.wall_texture, v2{50, state.camera.screen_size.y - 80 - f32(tile_size)}, rl.WHITE)
+    case Tower: rl.DrawTextureV(state.atlas.tower_texture, v2{50, state.camera.screen_size.y - 80 - f32(tile_size)}, accent)
+    case Wall: rl.DrawTextureV(state.atlas.wall_texture, v2{50, state.camera.screen_size.y - 80 - f32(tile_size)}, accent)
     }
 }
 
