@@ -10,7 +10,7 @@ import "core:math/noise"
 import rl "vendor:raylib"
 
 
-world_size :: 256
+world_size :: 128
 tile_size :: 64;
 fps :: 60
 default_width :: 800
@@ -97,8 +97,7 @@ DefaultWall :: Wall {
 
 draw_wall :: proc(t : Wall) {
     pos := world_pos_to_screen_pos(t.pos)
-    col := rl.Color{255,0,255,255}
-    rl.DrawRectangleV(pos, t.hitbox*state.camera.zoom, col)
+    rl.DrawTextureEx(state.atlas.wall_texture, pos, 0.0, state.camera.zoom, rl.WHITE)
 }
 
 // takes a position in world space not snapped
@@ -111,6 +110,23 @@ place_wall :: proc(p : v2) {
 Building :: union {
     Tower,
     Wall,
+}
+
+building_types :: 2
+
+building_string :: proc(b : Building) -> string {
+    switch b in b {
+    case Tower: return "Tower"
+    case Wall: return "Wall"
+    }
+    return "ligma"
+}
+
+place_building :: proc(b : Building, p : v2) {
+    switch b in b {
+    case Tower: place_tower(p)
+    case Wall: place_wall(p)
+    }
 }
 
 draw_building :: proc(b : Building) {
@@ -127,6 +143,7 @@ TextureAtlas :: struct {
     water_texture : rl.Texture2D,
     forest_texture : rl.Texture2D,
     rock_texture : rl.Texture2D,
+    wall_texture : rl.Texture2D,
 }
 
 init_texture_atlas :: proc() {
@@ -137,6 +154,7 @@ init_texture_atlas :: proc() {
     atlas.water_texture = rl.LoadTexture("./water.png")
     atlas.forest_texture = rl.LoadTexture("./forest.png")
     atlas.rock_texture = rl.LoadTexture("./rock.png")
+    atlas.wall_texture = rl.LoadTexture("./wall.png")
     state.atlas = atlas
 }
 
@@ -156,12 +174,13 @@ PlaceableTile :: [TileKind]bool {
     .Grass = true,
     .Water = false,
     .Forest = false,
-    .Rock = true,
+    .Rock = false,
 }
 
 Tile :: struct {
     pos : v2,
-    kind : TileKind
+    kind : TileKind,
+    shade: f32
 }
 
 draw_tile :: proc(t : Tile) {
@@ -172,7 +191,8 @@ draw_tile :: proc(t : Tile) {
     case .Forest: texture = state.atlas.forest_texture
     case .Rock: texture = state.atlas.rock_texture
     }
-    rl.DrawTextureEx(texture, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.WHITE)
+    a := u8(255.0 * t.shade)
+    rl.DrawTextureEx(texture, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
 }
 
 GameState :: struct {
@@ -182,7 +202,11 @@ GameState :: struct {
     atlas : TextureAtlas,
 
     buildings : [dynamic]Building,
-    world : ^[world_size][world_size]Tile
+    world : ^[world_size][world_size]Tile,
+
+    selected_building : Building,
+
+    debug : bool,
 }
 
 DefaultGameState :: proc() -> GameState {
@@ -241,6 +265,10 @@ init_game_state :: proc(alloc := context.allocator) {
         zoom = 1.0,
     }
 
+    state.selected_building = Tower{}
+
+    state.debug = false
+
     if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
         state.camera.screen_size = v2{f32(default_width), f32(default_height)}
     }
@@ -258,10 +286,18 @@ init_game_state :: proc(alloc := context.allocator) {
 
     for row, y in state.world {
         for _, x in row {
+            kind := noise_to_tile(noise[(y*world_size) + x])
+
             tile := Tile{
-                kind = noise_to_tile(noise[(y*world_size) + x]),
+                kind = kind,
+                shade = 1.0,
                 pos = v2{f32(x), f32(y)} * f32(tile_size)
             }
+
+            if kind == .Rock {
+                tile.shade = (1.0 - noise[(y*world_size) + x])/0.25
+            }
+
             state.world[y][x] = tile
         }
     }
@@ -292,6 +328,12 @@ init_display :: proc(fullscreen : bool) {
 }
 
 handle_input :: proc() {
+    // debug toggling
+    {
+        if rl.IsKeyPressed(rl.KeyboardKey.GRAVE) {
+            state.debug = !state.debug
+        }
+    }
     // camera zoom
     {
         wm := rl.GetMouseWheelMove()
@@ -300,6 +342,8 @@ handle_input :: proc() {
         if wm != 0 {
             if state.camera.zoom+wm*zoom_speed > min_zoom {
                 state.camera.zoom += wm * zoom_speed
+            } else {
+                state.camera.zoom = min_zoom
             }
         }
     }
@@ -320,15 +364,19 @@ handle_input :: proc() {
             diff.x += 1
         }
 
-        state.camera.pos += rl.Vector2Normalize(diff) * 10 / state.camera.zoom
+        state.camera.pos += rl.Vector2Normalize(diff) * 1000 / state.camera.zoom * rl.GetFrameTime()
     }
     // placing buildings
     {
         if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-            place_tower(screen_pos_to_world_pos(rl.GetMousePosition()))
+            place_building(state.selected_building, screen_pos_to_world_pos(rl.GetMousePosition()))
         }
-        if rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
-            place_wall(screen_pos_to_world_pos(rl.GetMousePosition()))
+
+        // changing selected building
+        if rl.IsKeyPressed(rl.KeyboardKey.ONE) {
+            state.selected_building = Tower{}
+        } else if rl.IsKeyPressed(rl.KeyboardKey.TWO) {
+            state.selected_building = Wall{}
         }
     }
     // fullscreen toggle
@@ -412,6 +460,15 @@ draw_debug_info :: proc() {
     rl.DrawLine(0, i32(state.camera.screen_size.y/2), i32(state.camera.screen_size.x), i32(state.camera.screen_size.y/2), rl.BLACK)
 }
 
+draw_gui :: proc() {
+    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", building_string(state.selected_building))), 50, i32(state.camera.screen_size.y) - 50, 18, rl.BLACK)
+    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECT BUILDING <1 ... %d>", building_types)), 50, i32(state.camera.screen_size.y) - 70, 18, rl.BLACK)
+    switch b in state.selected_building {
+    case Tower: rl.DrawTextureV(state.atlas.tower_texture, v2{50, state.camera.screen_size.y - 80 - f32(tile_size)}, rl.WHITE)
+    case Wall: rl.DrawTextureV(state.atlas.wall_texture, v2{50, state.camera.screen_size.y - 80 - f32(tile_size)}, rl.WHITE)
+    }
+}
+
 draw :: proc() {
     rl.BeginDrawing()
 
@@ -430,7 +487,10 @@ draw :: proc() {
     }
 
     highlight_tile(rl.GetMousePosition())
-    draw_debug_info()
+    draw_gui()
+    if state.debug {
+        draw_debug_info()
+    }
 
     rl.EndDrawing()
 }
