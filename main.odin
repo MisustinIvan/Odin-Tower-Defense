@@ -567,6 +567,8 @@ handle_input :: proc() {
         if rl.IsKeyPressed(rl.KeyboardKey.R) {
             clear(&state.buildings)
             clear(&state.units)
+            // does this leak memory? - probably
+            state.selected_units = []^Unit{}
         }
     }
     // interact state toggling
