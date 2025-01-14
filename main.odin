@@ -12,6 +12,7 @@ import rl "vendor:raylib"
 
 world_size :: 128
 tile_size :: 64;
+tile_size_offset :: v2{f32(tile_size/2), f32(tile_size/2)}
 fps :: 60
 default_width :: 800
 default_height :: 600
@@ -45,101 +46,77 @@ grid_position :: proc(pos : v2, grid_size : i32) -> v2 {
     return v2{math.floor(pos.x / f32(grid_size)), math.floor(pos.y / f32(grid_size))}
 }
 
-Tower :: struct {
-    pos : v2,
-    hitbox : v2,
-    health : i32,
-    max_health : i32,
-}
-
-DefaultTower :: Tower {
-    pos = v2{0,0},
-    hitbox = v2{f32(tile_size),f32(tile_size)},
-    health = 100,
-    max_health = 100,
-}
-
-draw_tower :: proc(t : Tower) {
-    pos := world_pos_to_screen_pos(t.pos)
-    if t.health <= 0 {
-        rl.DrawTextureEx(state.atlas.tower_texture, pos, 0.0, state.camera.zoom, rl.RED)
-    } else {
-        rl.DrawTextureEx(state.atlas.tower_texture, pos, 0.0, state.camera.zoom, rl.WHITE)
-    }
-}
-
-// takes a position in world space not snapped
-place_tower :: proc(p : v2) {
-    tower := DefaultTower
-    tower.pos = snap_to_grid(p, tile_size)
-
-    tower_grid_pos := grid_position(tower.pos, tile_size)
-    target_tile := state.world[i32(tower_grid_pos.y)][i32(tower_grid_pos.x)]
-    placeable := PlaceableTile
-    if placeable[target_tile.kind] {
-        append(&state.buildings, tower)
-    }
-}
-
-Wall :: struct {
-    pos : v2,
-    hitbox : v2,
-    health : v2,
-    max_health : i32,
-}
-
-DefaultWall :: Wall {
-    pos = v2{0,0},
-    hitbox = v2{f32(tile_size),f32(tile_size)},
-    health = 100,
-    max_health = 100,
-}
-
-draw_wall :: proc(t : Wall) {
-    pos := world_pos_to_screen_pos(t.pos)
-    rl.DrawTextureEx(state.atlas.wall_texture, pos, 0.0, state.camera.zoom, rl.WHITE)
-}
-
-// takes a position in world space not snapped
-place_wall :: proc(p : v2) {
-    wall := DefaultWall
-    wall.pos = snap_to_grid(p, tile_size)
-
-    wall_grid_pos := grid_position(wall.pos, tile_size)
-    target_tile := state.world[i32(wall_grid_pos.y)][i32(wall_grid_pos.x)]
-    placeable := PlaceableTile
-    if placeable[target_tile.kind] {
-        append(&state.buildings, wall)
-    }
-}
-
-Building :: union {
+BuildingKind :: enum {
     Tower,
     Wall,
 }
 
-building_types :: 2
+BuildingKindN :: 2
 
-building_string :: proc(b : Building) -> string {
-    switch b in b {
-    case Tower: return "Tower"
-    case Wall: return "Wall"
-    }
-    return "ligma"
+Building :: struct {
+    kind : BuildingKind,
+    pos : v2,
+    health : i32,
+    max_health : i32,
 }
 
-place_building :: proc(b : Building, p : v2) {
-    switch b in b {
-    case Tower: place_tower(p)
-    case Wall: place_wall(p)
-    }
+DefaultTower :: Building {
+    kind = .Tower,
+    health = 100,
+    max_health = 100,
+}
+
+DefaultWall :: Building {
+    kind = .Wall,
+    health = 100,
+    max_health = 100,
 }
 
 draw_building :: proc(b : Building) {
-    switch b in b {
-    case Tower: draw_tower(b)
-    case Wall: draw_wall(b)
+    pos := world_pos_to_screen_pos(b.pos)
+    texture : rl.Texture2D
+    accent : rl.Color
+
+    if b.health <= 0 {
+        accent = rl.RED
+    } else {
+        accent = rl.WHITE
     }
+
+    switch b.kind {
+    case .Tower: texture = state.atlas.tower_texture;
+    case .Wall: texture = state.atlas.tower_texture;
+    }
+
+    rl.DrawTextureEx(texture, pos, 0.0, state.camera.zoom, accent)
+}
+
+// takes a position in world space not snapped
+place_building :: proc(k : BuildingKind, p : v2) {
+    building : Building
+
+    switch k {
+    case .Tower: building = DefaultTower;
+    case .Wall: building = DefaultWall;
+    }
+
+    building.pos = snap_to_grid(p, tile_size)
+
+    building_grid_pos := grid_position(building.pos, tile_size)
+    target_tile := state.world[i32(building_grid_pos.y)][i32(building_grid_pos.x)]
+    placeable := PlaceableTile
+    if placeable[target_tile.kind] {
+        append(&state.buildings, building)
+    }
+}
+
+building_kind_string :: proc(k : BuildingKind) -> string {
+    res : string
+    switch k {
+    case .Tower: res = "Tower"
+    case .Wall: res = "Wall"
+    }
+    return res
 }
 
 TextureAtlas :: struct {
@@ -213,140 +190,87 @@ draw_tile :: proc(t : Tile) {
     rl.DrawTextureEx(t.texture^, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
 }
 
-Orc :: struct {
-    pos : v2,
-    spd : f32,
-    target : v2,
-    health : i32,
-    max_health : i32,
-    damage : i32,
-}
-
-DefaultOrc :: Orc {
-    pos = v2{0,0},
-    spd = 4.0,
-    health = 100,
-    max_health = 100,
-    damage = 10,
-}
-
-place_orc :: proc(pos : v2) {
-    orc := DefaultOrc
-    orc.pos = pos
-    orc.target = orc.pos
-
-    orc_grid_pos := grid_position(orc.pos + v2{f32(tile_size/2), f32(tile_size/2)}, tile_size)
-    target_tile := state.world[i32(orc_grid_pos.y)][i32(orc_grid_pos.x)]
-    placeable := PlaceableTile
-    if placeable[target_tile.kind] {
-        append(&state.units, orc)
-    }
-}
-
-draw_orc :: proc(orc : Orc) {
-    pos := world_pos_to_screen_pos(orc.pos)
-    rl.DrawTextureEx(state.atlas.orc_texture, pos, 0.0, state.camera.zoom, rl.WHITE)
-}
-
-Berserk :: struct {
-    pos : v2,
-    spd : f32,
-    health : i32,
-    target : v2,
-    max_health : i32,
-    damage : i32,
-}
-
-DefaultBerserk :: Berserk {
-    pos = v2{0,0},
-    spd = 8.0,
-    health = 50,
-    max_health = 50,
-    damage = 20,
-}
-
-place_berserk :: proc(pos : v2) {
-    berserk := DefaultBerserk
-    berserk.pos = pos
-    berserk.target = berserk.pos
-
-    berserk_grid_pos := grid_position(berserk.pos + v2{f32(tile_size/2), f32(tile_size/2)}, tile_size)
-    target_tile := state.world[i32(berserk_grid_pos.y)][i32(berserk_grid_pos.x)]
-    placeable := PlaceableTile
-    if placeable[target_tile.kind] {
-        append(&state.units, berserk)
-    }
-}
-
-draw_berserk :: proc(berserk : Berserk) {
-    pos := world_pos_to_screen_pos(berserk.pos)
-    rl.DrawTextureEx(state.atlas.berserk_texture, pos, 0.0, state.camera.zoom, rl.WHITE)
-}
-
-Unit :: union {
+UnitKind :: enum {
     Orc,
     Berserk,
 }
 
-unit_pos :: proc(u : Unit) -> v2 {
-    switch u in u {
-    case Orc: return u.pos
-    case Berserk: return u.pos
+UnitKindN :: 2
+
+unit_kind_string :: proc(k : UnitKind) -> string {
+    res : string
+    switch k {
+    case .Orc: res = "Orc";
+    case .Berserk: res = "Berserk"
     }
-    return v2{0,0}
+    return res
 }
 
-unit_set_target :: proc(u : ^Unit, tgt : v2) {
-    switch &u in u {
-    case Orc: u.target = tgt
-    case Berserk: u.target = tgt
-    }
+Unit :: struct {
+    kind: UnitKind,
+    pos : v2,
+    health : i32,
+    max_health : i32,
+    damage : i32,
+    target : v2,
+    spd : f32,
 }
 
-update_unit :: proc(u : ^Unit) {
-    switch &u in u {
-    case Orc: {
-        if u.pos != u.target {
-            diff := u.target - u.pos
-            if rl.Vector2Length(diff) < u.spd {
-                u.pos = u.target
-            } else {
-                u.pos += rl.Vector2Normalize(diff)*u.spd
-            }
-        }
-    }
-    case Berserk: {
-        if u.pos != u.target {
-            diff := u.target - u.pos
-            if rl.Vector2Length(diff) < u.spd {
-                u.pos = u.target
-            } else {
-                u.pos += rl.Vector2Normalize(diff)*u.spd
-            }
-        }
-    }
-    }
+DefaultOrc :: Unit {
+    kind = .Orc,
+    health = 10,
+    max_health = 10,
+    damage = 1,
+    spd = 5.0,
 }
 
-unit_string :: proc(u : Unit) -> string {
-    switch u in u {
-    case Orc: return "Orc"
-    case Berserk: return "Berserk"
-    }
-    return "ligma"
-}
-
-place_unit :: proc(u : Unit, pos : v2) {
-    switch u in u {
-    case Orc: place_orc(pos)
-    case Berserk: place_berserk(pos)
-    }
+DefaultBerserk :: Unit {
+    kind = .Berserk,
+    health = 5,
+    max_health = 5,
+    damage = 2,
+    spd = 10.0,
 }
 
 draw_unit :: proc(u : Unit) {
-    switch u in u {
-    case Orc: draw_orc(u)
-    case Berserk: draw_berserk(u)
+    texture : rl.Texture2D
+    switch u.kind {
+    case .Orc: texture = state.atlas.orc_texture;
+    case .Berserk: texture = state.atlas.berserk_texture;
+    }
+    rl.DrawTextureEx(texture, world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
+}
+
+unit_set_target :: proc(u : ^Unit, tgt : v2) {
+    u.target = tgt
+}
+
+update_unit :: proc(u : ^Unit) {
+    if u.pos != u.target {
+        diff := u.target - u.pos
+        if rl.Vector2Length(diff) < u.spd {
+            u.pos = u.target
+        } else {
+            u.pos += rl.Vector2Normalize(diff)*u.spd
+        }
+    }
+}
+
+place_unit :: proc(k : UnitKind, pos : v2) {
+    unit : Unit
+    switch k {
+    case .Orc: unit = DefaultOrc;
+    case .Berserk: unit = DefaultBerserk;
+    }
+
+    unit.pos = pos
+    unit.target = unit.pos
+
+    unit_grid_pos := grid_position(unit.pos + tile_size_offset, tile_size)
+    target_tile := state.world[i32(unit_grid_pos.y)][i32(unit_grid_pos.x)]
+    placeable := PlaceableTile
+    if placeable[target_tile.kind] {
+        append(&state.units, unit)
     }
 }
 
@@ -363,22 +287,20 @@ GameState :: struct {
     atlas : TextureAtlas,
 
     buildings : [dynamic]Building,
-    world : ^[world_size][world_size]Tile,
-
-    selected_building : Building,
-
-    interact_state : InteractState,
+    selected_building : BuildingKind,
 
     units : [dynamic]Unit,
-    selected_unit : Unit,
+    selected_unit : UnitKind,
 
-    debug : bool,
+    world : ^[world_size][world_size]Tile,
 
+    interact_state : InteractState,
     dragging : bool,
     drag_start : v2,
     drag_end : v2,
+    selected_units : []^Unit,
 
-    selected_units : []^Unit
+    debug : bool,
 }
 
 DefaultGameState :: proc() -> GameState {
@@ -437,8 +359,8 @@ init_game_state :: proc(alloc := context.allocator) {
         zoom = 1.0,
     }
 
-    state.selected_building = Tower{}
-    state.selected_unit = Orc{}
+    state.selected_building = .Tower
+    state.selected_unit = .Orc
 
     state.interact_state = .None
 
@@ -530,7 +452,7 @@ handle_input :: proc() {
     if state.interact_state == .None {
         if rl.IsKeyPressed(rl.KeyboardKey.M) || rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
             for &u in state.selected_units {
-                unit_set_target(u, screen_pos_to_world_pos(rl.GetMousePosition() - v2{f32(tile_size/2), f32(tile_size/2)}))
+                unit_set_target(u, screen_pos_to_world_pos(rl.GetMousePosition() - tile_size_offset))
             }
         }
 
@@ -551,14 +473,14 @@ handle_input :: proc() {
             })
 
             units, _ := slice.filter(unit_ptrs, proc (u : ^Unit) -> bool {
-                pos := unit_pos(u^)
+                pos := u.pos
                 return (pos.x >= state.drag_start.x && pos.x <= state.drag_end.x &&
                         pos.y >= state.drag_start.y && pos.y <= state.drag_end.y)
             })
 
             state.selected_units = units
             for u in units {
-                rl.DrawCircleV(world_pos_to_screen_pos(unit_pos(u^)), f32(tile_size/2), rl.Color{0,255,0, 50})
+                rl.DrawCircleV(world_pos_to_screen_pos(u.pos), f32(tile_size/2), rl.Color{0,255,0, 50})
             }
         }
     }
@@ -574,6 +496,8 @@ handle_input :: proc() {
     // interact state toggling
     {
         if rl.IsKeyPressed(rl.KeyboardKey.B) {
+            // does this leak memory? - probably
+            state.selected_units = []^Unit{}
             if state.interact_state != .Building {
                 state.interact_state = .Building
             } else {
@@ -581,6 +505,8 @@ handle_input :: proc() {
             }
         }
         if rl.IsKeyPressed(rl.KeyboardKey.G) {
+            // does this leak memory? - probably
+            state.selected_units = []^Unit{}
             if state.interact_state != .Spawning {
                 state.interact_state = .Spawning
             } else {
@@ -635,9 +561,9 @@ handle_input :: proc() {
 
             // changing selected building
             if rl.IsKeyPressed(rl.KeyboardKey.ONE) {
-                state.selected_building = Tower{}
+                state.selected_building = .Tower
             } else if rl.IsKeyPressed(rl.KeyboardKey.TWO) {
-                state.selected_building = Wall{}
+                state.selected_building = .Wall
             }
         }
     }
@@ -645,14 +571,14 @@ handle_input :: proc() {
     {
         if state.interact_state == .Spawning {
             if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-                place_unit(state.selected_unit, screen_pos_to_world_pos(rl.GetMousePosition()) - v2{f32(tile_size/2), f32(tile_size/2)})
+                place_unit(state.selected_unit, screen_pos_to_world_pos(rl.GetMousePosition()) - tile_size_offset)
             }
 
             // changing selected unit
             if rl.IsKeyPressed(rl.KeyboardKey.ONE) {
-                state.selected_unit = Orc{}
+                state.selected_unit = .Orc
             } else if rl.IsKeyPressed(rl.KeyboardKey.TWO) {
-                state.selected_unit = Berserk{}
+                state.selected_unit = .Berserk
             }
         }
     }
@@ -738,6 +664,10 @@ draw_debug_info :: proc() {
 
     rl.DrawLine(i32(state.camera.screen_size.x/2), 0, i32(state.camera.screen_size.x/2), i32(state.camera.screen_size.y), rl.BLACK)
     rl.DrawLine(0, i32(state.camera.screen_size.y/2), i32(state.camera.screen_size.x), i32(state.camera.screen_size.y/2), rl.BLACK)
+
+    for u in state.selected_units {
+        rl.DrawLineV(world_pos_to_screen_pos(u.pos), world_pos_to_screen_pos(u.target), rl.BLACK)
+    }
 }
 
 draw_gui :: proc() {
@@ -746,17 +676,17 @@ draw_gui :: proc() {
     // building ui
     {
         rl.DrawText("TOGGLE BUILDING MODE WITH <B>", 50, bottom_anchor - 30, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", building_string(state.selected_building))), 50, bottom_anchor - 50, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECT BUILDING <1 ... %d>", building_types)), 50, bottom_anchor - 70, 18, rl.BLACK)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", building_kind_string(state.selected_building))), 50, bottom_anchor - 50, 18, rl.BLACK)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECT BUILDING <1 ... %d>", BuildingKindN)), 50, bottom_anchor - 70, 18, rl.BLACK)
 
         accent := rl.WHITE
         if state.interact_state != .Building {
             accent = rl.RED
         }
         texture : rl.Texture2D
-        switch b in state.selected_building {
-        case Tower: texture = state.atlas.tower_texture
-        case Wall: texture = state.atlas.wall_texture
+        switch state.selected_building {
+        case .Tower: texture = state.atlas.tower_texture
+        case .Wall: texture = state.atlas.wall_texture
         }
         rl.DrawTextureV(texture, v2{50, bottom_anchor_f - 80 - f32(tile_size)}, accent)
     }
@@ -765,17 +695,18 @@ draw_gui :: proc() {
         spawning_bottom_anchor := bottom_anchor - 80 - tile_size
         spawning_bottom_anchor_f := f32(bottom_anchor - 80 - tile_size)
         rl.DrawText("TOGGLE SPAWNING MODE WITH <G>", 50, spawning_bottom_anchor - 30, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", unit_string(state.selected_unit))), 50, spawning_bottom_anchor - 50, 18, rl.BLACK)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", unit_kind_string(state.selected_unit))), 50, spawning_bottom_anchor - 50, 18, rl.BLACK)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED UNIT <1 ... %d>", UnitKindN)), 50, spawning_bottom_anchor - 70, 18, rl.BLACK)
         accent := rl.WHITE
         if state.interact_state != .Spawning {
             accent = rl.RED
         }
         texture : rl.Texture2D
-        switch u in state.selected_unit {
-        case Orc: texture = state.atlas.orc_texture
-        case Berserk: texture = state.atlas.berserk_texture
+        switch  state.selected_unit {
+        case .Orc: texture = state.atlas.orc_texture
+        case .Berserk: texture = state.atlas.berserk_texture
         }
-        rl.DrawTextureV(texture, v2{50, spawning_bottom_anchor_f - 50 - f32(tile_size) - 10}, accent)
+        rl.DrawTextureV(texture, v2{50, spawning_bottom_anchor_f - 70 - f32(tile_size) - 10}, accent)
     }
     // dragging ui
     if state.dragging {
@@ -784,7 +715,22 @@ draw_gui :: proc() {
     }
     // selected unit gui
     for u in state.selected_units {
-        rl.DrawRectangleV(world_pos_to_screen_pos(unit_pos(u^)), v2{f32(tile_size), f32(tile_size)}*state.camera.zoom, rl.Color{0,255,0,50})
+        pos := world_pos_to_screen_pos(u.pos)
+        size := i32(f32(tile_size)*state.camera.zoom)
+        rl.DrawRectangleLines(i32(pos.x), i32(pos.y), size, size, rl.BLACK)
+    }
+
+    // selected units gui 2
+    if len(state.selected_units) != 0 {
+        units_bottom_anchor := bottom_anchor - 30
+        units_left_anchor := i32(state.camera.screen_size.x - 100)
+
+        for unit in state.selected_units {
+            rl.DrawText(strings.clone_to_cstring(unit_kind_string(unit.kind)), units_left_anchor, units_bottom_anchor, 18, rl.BLACK)
+            units_bottom_anchor -= 20
+        }
+
+        rl.DrawText("SELECTED UNITS", units_left_anchor, units_bottom_anchor, 18, rl.BLACK)
     }
 }
 
