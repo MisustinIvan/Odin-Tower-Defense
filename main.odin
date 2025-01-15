@@ -67,6 +67,15 @@ cull_rect_partial :: proc(pos : v2, size : v2) -> bool {
     return !(pos.x + size.x < min.x || pos.x > max.x || pos.y + size.y < min.y || pos.y > max.y)
 }
 
+cull_camera_bounds :: proc() -> (v2, v2) {
+    y_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.y - (state.camera.screen_size.y / 2 / state.camera.zoom)) / f32(tile_size)))))
+    y_max := min(world_size - 1, y_min + i32(math.ceil(state.camera.screen_size.y / tile_size / state.camera.zoom)) + 1)
+
+    x_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.x - (state.camera.screen_size.x / 2 / state.camera.zoom)) / f32(tile_size)))))
+    x_max := min(world_size - 1, x_min + i32(math.ceil(state.camera.screen_size.x / tile_size / state.camera.zoom)) + 1)
+    return v2{f32(x_min), f32(y_min)}, v2{f32(x_max), f32(y_max)}
+}
+
 snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
     return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
 }
@@ -693,7 +702,7 @@ draw_debug_info :: proc() {
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("FPS: %d", rl.GetFPS())), 50, 30, 18, rl.BLACK)
 
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera pos: [%f, %f]", state.camera.pos.x, state.camera.pos.y)), 50, 50, 18, rl.BLACK)
-    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera dist: [%f]", state.camera.zoom)), 50, 70, 18, rl.BLACK)
+    rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera zoom: [%f]", state.camera.zoom)), 50, 70, 18, rl.BLACK)
 
     {
         mouse_pos := rl.GetMousePosition()
@@ -775,15 +784,12 @@ draw :: proc() {
     // draw tiles
     {
         // calculate the required x and y ranges to cull all other tiles
+        cull_min, cull_max := cull_camera_bounds()
 
-        y_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.y - (state.camera.screen_size.y / 2 / state.camera.zoom)) / f32(tile_size)))))
-        y_max := min(world_size - 1, y_min + i32(math.ceil(state.camera.screen_size.y / tile_size / state.camera.zoom)) + 1)
-
-        x_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.x - (state.camera.screen_size.x / 2 / state.camera.zoom)) / f32(tile_size)))))
-        x_max := min(world_size - 1, x_min + i32(math.ceil(state.camera.screen_size.x / tile_size / state.camera.zoom)) + 1)
-
-        log(.INFO, "y_min: %d", y_min)
-        log(.INFO, "y_max: %d", y_max)
+        x_min := i32(cull_min.x)
+        x_max := i32(cull_max.x)
+        y_min := i32(cull_min.y)
+        y_max := i32(cull_max.y)
 
         for &row in state.world[y_min:y_max] {
             for tile in row[x_min:x_max] {
