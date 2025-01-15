@@ -51,10 +51,17 @@ BuildingKind :: enum {
     Wall,
 }
 
+@(rodata)
+BuildingTextureKind := [BuildingKind]TextureKind {
+    .Tower = .TowerTexture,
+    .Wall = .WallTexture,
+
+}
 BuildingKindN :: 2
 
 Building :: struct {
     kind : BuildingKind,
+    texture : TextureKind,
     pos : v2,
     health : i32,
     max_health : i32,
@@ -62,12 +69,14 @@ Building :: struct {
 
 DefaultTower :: Building {
     kind = .Tower,
+    texture = .TowerTexture,
     health = 100,
     max_health = 100,
 }
 
 DefaultWall :: Building {
     kind = .Wall,
+    texture = .WallTexture,
     health = 100,
     max_health = 100,
 }
@@ -83,12 +92,7 @@ draw_building :: proc(b : Building) {
         accent = rl.WHITE
     }
 
-    switch b.kind {
-    case .Tower: texture = state.atlas.tower_texture;
-    case .Wall: texture = state.atlas.tower_texture;
-    }
-
-    rl.DrawTextureEx(texture, pos, 0.0, state.camera.zoom, accent)
+    rl.DrawTextureEx(state.atlas.textures[b.texture], pos, 0.0, state.camera.zoom, accent)
 }
 
 // takes a position in world space not snapped
@@ -119,49 +123,44 @@ building_kind_string :: proc(k : BuildingKind) -> string {
     return res
 }
 
+TextureKind :: enum {
+    WaterTexture,
+    GrassTexture0,
+    GrassTexture1,
+    GrassTexture2,
+    GrassTexture3,
+    ForestTexture,
+    RockTexture,
+    TowerTexture,
+    WallTexture,
+    OrcTexture,
+    BerserkTexture,
+}
+
 TextureAtlas :: struct {
-    tower_texture : rl.Texture2D,
-    enemy_texture : rl.Texture2D,
-    grass_texture_0 : rl.Texture2D,
-    grass_texture_1 : rl.Texture2D,
-    grass_texture_2 : rl.Texture2D,
-    grass_texture_3 : rl.Texture2D,
-    water_texture : rl.Texture2D,
-    forest_texture : rl.Texture2D,
-    rock_texture : rl.Texture2D,
-    wall_texture : rl.Texture2D,
-    orc_texture : rl.Texture2D,
-    berserk_texture : rl.Texture2D,
+    textures : [TextureKind]rl.Texture2D
 }
 
 init_texture_atlas :: proc() {
     atlas : TextureAtlas
-    atlas.tower_texture = rl.LoadTexture("./tower.png")
-    atlas.enemy_texture = rl.LoadTexture("./enemy.png")
-    atlas.grass_texture_0 = rl.LoadTexture("./grass_0.png")
-    atlas.grass_texture_1 = rl.LoadTexture("./grass_1.png")
-    atlas.grass_texture_2 = rl.LoadTexture("./grass_2.png")
-    atlas.grass_texture_3 = rl.LoadTexture("./grass_3.png")
-    atlas.water_texture = rl.LoadTexture("./water.png")
-    atlas.forest_texture = rl.LoadTexture("./forest.png")
-    atlas.rock_texture = rl.LoadTexture("./rock.png")
-    atlas.wall_texture = rl.LoadTexture("./wall.png")
-    atlas.orc_texture = rl.LoadTexture("./orc.png")
-    atlas.berserk_texture = rl.LoadTexture("./berserk.png")
+    atlas.textures[.WaterTexture] = rl.LoadTexture("./water.png")
+    atlas.textures[.GrassTexture0] = rl.LoadTexture("./grass_0.png")
+    atlas.textures[.GrassTexture1] = rl.LoadTexture("./grass_1.png")
+    atlas.textures[.GrassTexture2] = rl.LoadTexture("./grass_2.png")
+    atlas.textures[.GrassTexture3] = rl.LoadTexture("./grass_3.png")
+    atlas.textures[.ForestTexture] = rl.LoadTexture("./forest.png")
+    atlas.textures[.RockTexture] = rl.LoadTexture("./rock.png")
+    atlas.textures[.TowerTexture] = rl.LoadTexture("./tower.png")
+    atlas.textures[.WallTexture] = rl.LoadTexture("./wall.png")
+    atlas.textures[.OrcTexture] = rl.LoadTexture("./orc.png")
+    atlas.textures[.BerserkTexture] = rl.LoadTexture("./berserk.png")
     state.atlas = atlas
 }
 
 deinit_texture_atlas :: proc() {
-    rl.UnloadTexture(state.atlas.tower_texture)
-    rl.UnloadTexture(state.atlas.enemy_texture)
-    rl.UnloadTexture(state.atlas.grass_texture_0)
-    rl.UnloadTexture(state.atlas.grass_texture_1)
-    rl.UnloadTexture(state.atlas.grass_texture_2)
-    rl.UnloadTexture(state.atlas.grass_texture_3)
-    rl.UnloadTexture(state.atlas.water_texture)
-    rl.UnloadTexture(state.atlas.forest_texture)
-    rl.UnloadTexture(state.atlas.rock_texture)
-    rl.UnloadTexture(state.atlas.wall_texture)
+    for texture in state.atlas.textures {
+        rl.UnloadTexture(texture)
+    }
 }
 
 TileKind :: enum {
@@ -181,18 +180,24 @@ PlaceableTile :: [TileKind]bool {
 Tile :: struct {
     pos : v2,
     kind : TileKind,
-    texture : ^rl.Texture2D,
+    texture : TextureKind,
     shade: f32
 }
 
 draw_tile :: proc(t : Tile) {
     a := u8(255.0 * t.shade)
-    rl.DrawTextureEx(t.texture^, world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
+    rl.DrawTextureEx(state.atlas.textures[t.texture], world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
 }
 
 UnitKind :: enum {
     Orc,
     Berserk,
+}
+
+@(rodata)
+UnitKindTexture := [UnitKind]TextureKind {
+    .Orc = .OrcTexture,
+    .Berserk = .BerserkTexture,
 }
 
 UnitKindN :: 2
@@ -208,6 +213,7 @@ unit_kind_string :: proc(k : UnitKind) -> string {
 
 Unit :: struct {
     kind: UnitKind,
+    texture : TextureKind,
     pos : v2,
     health : i32,
     max_health : i32,
@@ -218,6 +224,7 @@ Unit :: struct {
 
 DefaultOrc :: Unit {
     kind = .Orc,
+    texture = .OrcTexture,
     health = 10,
     max_health = 10,
     damage = 1,
@@ -226,6 +233,7 @@ DefaultOrc :: Unit {
 
 DefaultBerserk :: Unit {
     kind = .Berserk,
+    texture = .BerserkTexture,
     health = 5,
     max_health = 5,
     damage = 2,
@@ -234,11 +242,7 @@ DefaultBerserk :: Unit {
 
 draw_unit :: proc(u : Unit) {
     texture : rl.Texture2D
-    switch u.kind {
-    case .Orc: texture = state.atlas.orc_texture;
-    case .Berserk: texture = state.atlas.berserk_texture;
-    }
-    rl.DrawTextureEx(texture, world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
+    rl.DrawTextureEx(state.atlas.textures[u.texture], world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
 }
 
 unit_set_target :: proc(u : ^Unit, tgt : v2) {
@@ -393,20 +397,20 @@ init_game_state :: proc(alloc := context.allocator) {
 
             switch kind {
             case.Grass: {
-                grass_textures_choice := []^rl.Texture2D{&state.atlas.grass_texture_0, &state.atlas.grass_texture_1, &state.atlas.grass_texture_2, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3, &state.atlas.grass_texture_3}
+                grass_textures_choice := []TextureKind{.GrassTexture0, .GrassTexture1, .GrassTexture2, .GrassTexture3, .GrassTexture3, .GrassTexture3, .GrassTexture3, .GrassTexture3, .GrassTexture3, .GrassTexture3, .GrassTexture3, .GrassTexture3}
                 tile.texture = rand.choice(grass_textures_choice)
                 tile.shade = 0.98+(rand.float32()*0.02)
             }
             case.Rock: {
-                tile.texture = &state.atlas.rock_texture
+                tile.texture = .RockTexture
                 tile.shade = (1.0 - noise[(y*world_size) + x])/0.25
             }
             case.Water: {
-                tile.texture = &state.atlas.water_texture
+                tile.texture = .WaterTexture
                 tile.shade = (1.0 - (0.1 - noise[(y*world_size)+x]))
             }
             case.Forest: {
-                tile.texture = &state.atlas.forest_texture
+                tile.texture = .ForestTexture
             }
             }
 
@@ -683,12 +687,7 @@ draw_gui :: proc() {
         if state.interact_state != .Building {
             accent = rl.RED
         }
-        texture : rl.Texture2D
-        switch state.selected_building {
-        case .Tower: texture = state.atlas.tower_texture
-        case .Wall: texture = state.atlas.wall_texture
-        }
-        rl.DrawTextureV(texture, v2{50, bottom_anchor_f - 80 - f32(tile_size)}, accent)
+        rl.DrawTextureV(state.atlas.textures[BuildingTextureKind[state.selected_building]], v2{50, bottom_anchor_f - 80 - f32(tile_size)}, accent)
     }
     // spawning ui
     {
@@ -701,12 +700,7 @@ draw_gui :: proc() {
         if state.interact_state != .Spawning {
             accent = rl.RED
         }
-        texture : rl.Texture2D
-        switch  state.selected_unit {
-        case .Orc: texture = state.atlas.orc_texture
-        case .Berserk: texture = state.atlas.berserk_texture
-        }
-        rl.DrawTextureV(texture, v2{50, spawning_bottom_anchor_f - 70 - f32(tile_size) - 10}, accent)
+        rl.DrawTextureV(state.atlas.textures[UnitKindTexture[state.selected_unit]], v2{50, spawning_bottom_anchor_f - 70 - f32(tile_size) - 10}, accent)
     }
     // dragging ui
     if state.dragging {
