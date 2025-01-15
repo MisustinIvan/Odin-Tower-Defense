@@ -33,10 +33,38 @@ screen_pos_to_world_pos :: proc(pos : v2) -> v2 {
     return lc + (pos / state.camera.zoom)
 }
 
-world_pos_to_screen_pos :: proc(pos: v2) -> v2 {
+world_pos_to_screen_pos :: proc(pos : v2) -> v2 {
     screen_center := state.camera.screen_size/2
     diff := pos - state.camera.pos
     return screen_center + (diff * state.camera.zoom)
+}
+
+cull_pos :: proc(pos : v2) -> bool {
+    min := state.camera.pos - (state.camera.screen_size /  state.camera.zoom  / 2)
+    max := min + (state.camera.screen_size / state.camera.zoom)
+    return pos.x >= min.x && pos.x <= max.x && pos.y >= min.y && pos.y <= max.y
+}
+
+cull_rect_full :: proc(pos : v2, size : v2) -> bool {
+    min := state.camera.pos - (state.camera.screen_size /  state.camera.zoom  / 2)
+    max := min + (state.camera.screen_size / state.camera.zoom)
+
+    p1 := pos
+    p2 := p1 + size
+    p3 := p1 + v2{size.x, 0}
+    p4 := p1 + v2{0, size.y}
+
+    return  (p1.x >= min.x && p1.x <= max.x && p1.y >= min.y && p1.y <= max.y) ||
+            (p2.x >= min.x && p2.x <= max.x && p2.y >= min.y && p2.y <= max.y) ||
+            (p3.x >= min.x && p3.x <= max.x && p3.y >= min.y && p3.y <= max.y) ||
+            (p4.x >= min.x && p4.x <= max.x && p4.y >= min.y && p4.y <= max.y)
+}
+
+cull_rect_partial :: proc(pos : v2, size : v2) -> bool {
+    min := state.camera.pos - (state.camera.screen_size / state.camera.zoom / 2)
+    max := min + (state.camera.screen_size / state.camera.zoom)
+
+    return !(pos.x + size.x < min.x || pos.x > max.x || pos.y + size.y < min.y || pos.y > max.y)
 }
 
 snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
