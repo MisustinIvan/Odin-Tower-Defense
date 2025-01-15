@@ -10,7 +10,7 @@ import "core:math/noise"
 import rl "vendor:raylib"
 
 
-world_size :: 128
+world_size :: 512
 tile_size :: 64;
 tile_size_offset :: v2{f32(tile_size/2), f32(tile_size/2)}
 fps :: 60
@@ -18,6 +18,7 @@ default_width :: 800
 default_height :: 600
 
 v2 :: rl.Vector2
+rect :: rl.Rectangle
 
 Camera :: struct {
     fps : i32,
@@ -142,19 +143,18 @@ TextureAtlas :: struct {
 }
 
 init_texture_atlas :: proc() {
-    atlas : TextureAtlas
-    atlas.textures[.WaterTexture] = rl.LoadTexture("./water.png")
-    atlas.textures[.GrassTexture0] = rl.LoadTexture("./grass_0.png")
-    atlas.textures[.GrassTexture1] = rl.LoadTexture("./grass_1.png")
-    atlas.textures[.GrassTexture2] = rl.LoadTexture("./grass_2.png")
-    atlas.textures[.GrassTexture3] = rl.LoadTexture("./grass_3.png")
-    atlas.textures[.ForestTexture] = rl.LoadTexture("./forest.png")
-    atlas.textures[.RockTexture] = rl.LoadTexture("./rock.png")
-    atlas.textures[.TowerTexture] = rl.LoadTexture("./tower.png")
-    atlas.textures[.WallTexture] = rl.LoadTexture("./wall.png")
-    atlas.textures[.OrcTexture] = rl.LoadTexture("./orc.png")
-    atlas.textures[.BerserkTexture] = rl.LoadTexture("./berserk.png")
-    state.atlas = atlas
+    state.atlas = TextureAtlas{}
+    state.atlas.textures[.WaterTexture] = rl.LoadTexture("./water.png")
+    state.atlas.textures[.GrassTexture0] = rl.LoadTexture("./grass_0.png")
+    state.atlas.textures[.GrassTexture1] = rl.LoadTexture("./grass_1.png")
+    state.atlas.textures[.GrassTexture2] = rl.LoadTexture("./grass_2.png")
+    state.atlas.textures[.GrassTexture3] = rl.LoadTexture("./grass_3.png")
+    state.atlas.textures[.ForestTexture] = rl.LoadTexture("./forest.png")
+    state.atlas.textures[.RockTexture] = rl.LoadTexture("./rock.png")
+    state.atlas.textures[.TowerTexture] = rl.LoadTexture("./tower.png")
+    state.atlas.textures[.WallTexture] = rl.LoadTexture("./wall.png")
+    state.atlas.textures[.OrcTexture] = rl.LoadTexture("./orc.png")
+    state.atlas.textures[.BerserkTexture] = rl.LoadTexture("./berserk.png")
 }
 
 deinit_texture_atlas :: proc() {
@@ -182,6 +182,10 @@ Tile :: struct {
     kind : TileKind,
     texture : TextureKind,
     shade: f32
+}
+
+tile_rect :: proc(t : Tile) -> rect {
+    return rect {x = t.pos.x, y = t.pos.x, width = f32(tile_size), height = f32(tile_size)}
 }
 
 draw_tile :: proc(t : Tile) {
@@ -238,6 +242,10 @@ DefaultBerserk :: Unit {
     max_health = 5,
     damage = 2,
     spd = 10.0,
+}
+
+unit_rect :: proc(u : Unit) -> rect {
+    return rect {x = u.pos.x, y = u.pos.y, width = f32(tile_size), height = f32(tile_size)}
 }
 
 draw_unit :: proc(u : Unit) {
@@ -528,7 +536,7 @@ handle_input :: proc() {
     {
         wm := rl.GetMouseWheelMove()
         zoom_speed : f32 = 0.1
-        min_zoom : f32 = 0.1
+        min_zoom : f32 = 0.2
         if wm != 0 {
             if state.camera.zoom+wm*zoom_speed > min_zoom {
                 state.camera.zoom += wm * zoom_speed
@@ -735,9 +743,24 @@ draw :: proc() {
 
     draw_world_grid()
 
-    for row in state.world {
-        for tile in row {
-            draw_tile(tile)
+
+    // draw tiles
+    {
+        // calculate the required x and y ranges to cull all other tiles
+
+        y_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.y - (state.camera.screen_size.y / 2 / state.camera.zoom)) / f32(tile_size)))))
+        y_max := min(world_size - 1, y_min + i32(math.ceil(state.camera.screen_size.y / tile_size / state.camera.zoom)) + 1)
+
+        x_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.x - (state.camera.screen_size.x / 2 / state.camera.zoom)) / f32(tile_size)))))
+        x_max := min(world_size - 1, x_min + i32(math.ceil(state.camera.screen_size.x / tile_size / state.camera.zoom)) + 1)
+
+        log(.INFO, "y_min: %d", y_min)
+        log(.INFO, "y_max: %d", y_max)
+
+        for &row in state.world[y_min:y_max] {
+            for tile in row[x_min:x_max] {
+                draw_tile(tile)
+            }
         }
     }
 
