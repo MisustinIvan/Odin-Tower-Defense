@@ -358,7 +358,6 @@ InteractState :: enum {
 }
 
 GameState :: struct {
-    alloc : mem.Allocator,
     camera : Camera,
 
     atlas : TextureAtlas,
@@ -490,8 +489,6 @@ init_game_state :: proc(alloc := context.allocator) {
             state.world[y][x] = tile
         }
     }
-
-    state.alloc = alloc
 }
 
 map_mut :: proc(xs: []$T, fn: proc(^T) -> $R) -> []R {
@@ -500,10 +497,6 @@ map_mut :: proc(xs: []$T, fn: proc(^T) -> $R) -> []R {
         result[i] = fn(&x)
     }
     return result
-}
-
-deinit_game_state :: proc() {
-    mem.free_all(state.alloc)
 }
 
 init_display :: proc(fullscreen : bool) {
@@ -718,6 +711,10 @@ draw_world_grid :: proc() {
 }
 
 draw_debug_info :: proc() {
+
+    // important
+    context.allocator = context.temp_allocator
+
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("FPS: %d", rl.GetFPS())), 50, 30, 18, rl.BLACK)
 
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("camera pos: [%f, %f]", state.camera.pos.x, state.camera.pos.y)), 50, 50, 18, rl.BLACK)
@@ -736,9 +733,16 @@ draw_debug_info :: proc() {
     for u in state.selected_units {
         rl.DrawLineV(world_pos_to_screen_pos(u.pos), world_pos_to_screen_pos(u.target), rl.BLACK)
     }
+
+    free_all(context.temp_allocator)
 }
 
 draw_gui :: proc() {
+
+    // very important step
+
+    context.allocator = context.temp_allocator
+
     bottom_anchor := i32(state.camera.screen_size.y)
     bottom_anchor_f := state.camera.screen_size.y
     // building ui
@@ -776,6 +780,7 @@ draw_gui :: proc() {
         rect.height *= state.camera.zoom
         rl.DrawRectangleRec(rect, rl.Color{120,120,120,120})
     }
+
     // selected unit gui
     for u in state.selected_units {
         pos := world_pos_to_screen_pos(u.pos)
@@ -795,6 +800,8 @@ draw_gui :: proc() {
 
         rl.DrawText("SELECTED UNITS", units_left_anchor, units_bottom_anchor, 18, rl.BLACK)
     }
+
+    free_all(context.temp_allocator)
 }
 
 draw :: proc() {
@@ -803,7 +810,6 @@ draw :: proc() {
     rl.ClearBackground(rl.WHITE)
 
     draw_world_grid()
-
 
     // draw tiles
     {
@@ -833,10 +839,12 @@ draw :: proc() {
     if state.interact_state == .Building {
         highlight_tile(rl.GetMousePosition())
     }
+
     draw_gui()
     if state.debug {
         draw_debug_info()
     }
+
 
     rl.EndDrawing()
 }
@@ -847,7 +855,6 @@ main :: proc() {
 
     init_game_state()
     log(LOG_LEVEL.INFO, "game state initialized")
-    defer deinit_game_state()
 
     init_texture_atlas()
     log(LOG_LEVEL.INFO, "texture atlas initialized")
