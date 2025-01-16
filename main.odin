@@ -10,7 +10,7 @@ import "core:math/noise"
 import rl "vendor:raylib"
 
 
-world_size :: 512
+world_size :: 128 
 tile_size :: 64;
 tile_size_offset :: v2{f32(tile_size/2), f32(tile_size/2)}
 fps :: 60
@@ -82,6 +82,15 @@ snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
 
 grid_position :: proc(pos : v2, grid_size : i32) -> v2 {
     return v2{math.floor(pos.x / f32(grid_size)), math.floor(pos.y / f32(grid_size))}
+}
+
+pos2rect :: proc(p1 : v2, p2 : v2) -> rect {
+    min_x := min(p1.x, p2.x)
+    min_y := min(p1.y, p2.y)
+    max_x := max(p1.x, p2.x)
+    max_y := max(p1.y, p2.y)
+
+    return rect{min_x, min_y, max_x - min_x, max_y - min_y}
 }
 
 BuildingKind :: enum {
@@ -522,15 +531,12 @@ handle_input :: proc() {
             })
 
             units, _ := slice.filter(unit_ptrs, proc (u : ^Unit) -> bool {
-                pos := u.pos
-                return (pos.x >= state.drag_start.x && pos.x <= state.drag_end.x &&
-                        pos.y >= state.drag_start.y && pos.y <= state.drag_end.y)
+                pos := u.pos + tile_size_offset
+                rect := pos2rect(state.drag_start, state.drag_end)
+                return rl.CheckCollisionPointRec(pos, rect)
             })
 
             state.selected_units = units
-            for u in units {
-                rl.DrawCircleV(world_pos_to_screen_pos(u.pos), f32(tile_size/2), rl.Color{0,255,0, 50})
-            }
         }
     }
     // reset buildings and enemies
@@ -749,8 +755,11 @@ draw_gui :: proc() {
     }
     // dragging ui
     if state.dragging {
-        pos := world_pos_to_screen_pos(state.drag_start)
-        rl.DrawRectangleV(pos, world_pos_to_screen_pos(state.drag_end) - pos, rl.Color{120,120,120,50})
+        rect := pos2rect(state.drag_start, state.drag_end)
+        lc := world_pos_to_screen_pos(v2{rect.x, rect.y})
+        rect.x = lc.x
+        rect.y = lc.y
+        rl.DrawRectangleRec(rect, rl.Color{120,120,120,120})
     }
     // selected unit gui
     for u in state.selected_units {
