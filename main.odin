@@ -610,7 +610,6 @@ handle_input :: proc() {
         }
         if rl.IsKeyDown(rl.KeyboardKey.S) {
             diff.y += 1
-
         }
         if rl.IsKeyDown(rl.KeyboardKey.A) {
             diff.x -= 1
