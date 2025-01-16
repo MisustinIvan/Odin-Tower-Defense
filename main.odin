@@ -20,6 +20,25 @@ default_height :: 600
 v2 :: rl.Vector2
 rect :: rl.Rectangle
 
+Option :: struct($T : typeid) {
+    val : T,
+    some : bool,
+}
+
+Some :: proc(x : $T) -> Option(T) {
+    return Option {
+        val = x,
+        some = true,
+    }
+}
+
+None :: proc($T) -> Option(T) {
+    return Option {
+        val = T{},
+        some = false,
+    }
+}
+
 Camera :: struct {
     fps : i32,
     pos : v2,
@@ -290,11 +309,11 @@ DefaultBerserk :: Unit {
     spd = 10.0,
 }
 
-unit_rect :: proc(u : Unit) -> rect {
+unit_rect :: proc(u : ^Unit) -> rect {
     return rect {x = u.pos.x, y = u.pos.y, width = f32(tile_size), height = f32(tile_size)}
 }
 
-draw_unit :: proc(u : Unit) {
+draw_unit :: proc(u : ^Unit) {
     texture : rl.Texture2D
     rl.DrawTextureEx(state.atlas.textures[u.texture], world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
 }
@@ -315,10 +334,10 @@ update_unit :: proc(u : ^Unit) {
 }
 
 place_unit :: proc(k : UnitKind, pos : v2) {
-    unit : Unit
+    unit := new(Unit)
     switch k {
-    case .Orc: unit = DefaultOrc;
-    case .Berserk: unit = DefaultBerserk;
+    case .Orc: unit^ = DefaultOrc;
+    case .Berserk: unit^ = DefaultBerserk;
     }
 
     unit.pos = pos
@@ -347,7 +366,7 @@ GameState :: struct {
     buildings : [dynamic]Building,
     selected_building : BuildingKind,
 
-    units : [dynamic]Unit,
+    units : [dynamic]^Unit,
     selected_unit : UnitKind,
 
     world : ^[world_size][world_size]Tile,
@@ -526,14 +545,9 @@ handle_input :: proc() {
         if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
             state.dragging = false
 
-            unit_ptrs := map_mut(state.units[:], proc (u : ^Unit) -> ^Unit {
-                return u
-            })
-
-            units, _ := slice.filter(unit_ptrs, proc (u : ^Unit) -> bool {
-                pos := u.pos + tile_size_offset
-                rect := pos2rect(state.drag_start, state.drag_end)
-                return rl.CheckCollisionPointRec(pos, rect)
+            units, _ := slice.filter(state.units[:], proc (u : ^Unit) -> bool {
+                select_rect := pos2rect(state.drag_start, state.drag_end)
+                return rl.CheckCollisionPointRec(u.pos + tile_size_offset, select_rect)
             })
 
             state.selected_units = units
@@ -664,8 +678,8 @@ handle_input :: proc() {
 
 update :: proc() {
     handle_input()
-    for &u in state.units {
-        update_unit(&u)
+    for u in state.units {
+        update_unit(u)
     }
 }
 
@@ -759,6 +773,8 @@ draw_gui :: proc() {
         lc := world_pos_to_screen_pos(v2{rect.x, rect.y})
         rect.x = lc.x
         rect.y = lc.y
+        rect.width *= state.camera.zoom
+        rect.height *= state.camera.zoom
         rl.DrawRectangleRec(rect, rl.Color{120,120,120,120})
     }
     // selected unit gui
