@@ -500,6 +500,7 @@ map_mut :: proc(xs: []$T, fn: proc(^T) -> $R) -> []R {
 }
 
 init_display :: proc(fullscreen : bool) {
+    rl.SetConfigFlags(rl.ConfigFlags{rl.ConfigFlag.WINDOW_RESIZABLE})
     rl.InitWindow(default_width, default_height, "RTS?")
     rl.SetTargetFPS(fps)
     if !fullscreen {
@@ -669,6 +670,15 @@ handle_input :: proc() {
 }
 
 update :: proc() {
+
+    // update screen dimensions
+    if rl.IsWindowResized() {
+        width := f32(rl.GetScreenWidth())
+        height := f32(rl.GetScreenHeight())
+
+        state.camera.screen_size = v2{width, height}
+    }
+
     handle_input()
     for u in state.units {
         update_unit(u)
