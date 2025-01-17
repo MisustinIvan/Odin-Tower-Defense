@@ -7,11 +7,13 @@ import "core:fmt"
 import "core:strings"
 import "core:math/rand"
 import "core:math/noise"
+import "core:container/priority_queue"
 import rl "vendor:raylib"
 
 
 world_size :: 128 
 tile_size :: 64;
+tile_radius :: tile_size/2
 tile_size_offset :: v2{f32(tile_size/2), f32(tile_size/2)}
 fps :: 60
 default_width :: 800
@@ -20,23 +22,113 @@ default_height :: 600
 v2 :: rl.Vector2
 rect :: rl.Rectangle
 
+AStarNode :: struct {
+    pos : v2,
+    weight : i32,
+    parent : ^AStarNode,
+}
+
+a_star_world :: proc(start : v2, end : v2) -> ^AStarNode {
+    visited := make(map[v2]bool, allocator = context.temp_allocator)
+    queue : priority_queue.Priority_Queue(^AStarNode)
+    priority_queue.init(
+        &queue,
+        proc(a, b : ^AStarNode) -> bool {
+            return a.weight < b.weight
+        },
+        proc(q: []^AStarNode, i, j: int) {
+            temp := q[i]
+            q[i] = q[j]
+            q[j] = temp
+        },
+        allocator = context.temp_allocator
+        )
+
+    // default state
+    {
+        default := new(AStarNode, allocator = state.alloc)
+        default^ = AStarNode{pos = start, weight = 0, parent = nil}
+        priority_queue.push(&queue, default)
+    }
+
+    for priority_queue.len(queue) != 0 {
+        current := priority_queue.pop(&queue)
+        if current.pos == end {
+            free_all(context.temp_allocator)
+            log(.INFO, "SUCCESSFULLY FOUND PATH!")
+            ret_val := new(AStarNode, allocator = state.alloc)
+            ret_val = current
+            // memory leak, as this does not get freed - TODO FIX
+            return ret_val
+        }
+
+        @(static) @(rodata)
+        directions := [4]v2{v2{1,0}, v2{-1,0}, v2{0,1}, v2{0,-1}}
+
+        if ok := current.pos in visited; ok {
+            continue
+        }
+
+        visited[current.pos] = true
+
+        neigbors : [4]Option(Tile)
+
+        for dir, i in directions {
+            new_pos := current.pos + dir
+            neigbors[i] = world_get(new_pos)
+        }
+
+        for neighbor, i in neigbors {
+            if neighbor.some && PlaceableTile[neighbor.val.kind] {
+                new_state := new(AStarNode, allocator = state.alloc)
+                new_state^ = AStarNode{pos = current.pos + directions[i], weight = current.weight + 1, parent = current}
+                priority_queue.push(&queue, new_state)
+            }
+        }
+    }
+
+    free_all(context.temp_allocator)
+    log(.WARN, "NO PATH FOUND")
+    return nil
+}
+
+draw_a_star_path :: proc(n : ^AStarNode) {
+    if n == nil {
+        return
+    }
+    n := n
+    for {
+        pos := world_pos_to_screen_pos(n.pos * tile_size)
+        rl.DrawRectangleV(pos, v2{tile_size, tile_size} * state.camera.zoom, rl.RED)
+        if n.parent == nil {
+            return
+        }
+        n = n.parent
+    }
+}
+
 Option :: struct($T : typeid) {
     val : T,
     some : bool,
 }
 
 Some :: proc(x : $T) -> Option(T) {
-    return Option {
+    return Option(T) {
         val = x,
         some = true,
     }
 }
 
 None :: proc($T) -> Option(T) {
-    return Option {
+    return Option(T) {
         val = T{},
         some = false,
     }
+}
+
+world_get :: proc(pos : v2) -> Option(Tile) {
+    if i32(pos.x) >= world_size || i32(pos.x) < 0 || i32(pos.y) >= world_size || i32(pos.y) < 0 { return None(Tile{}) }
+    return Some(state.world[i32(pos.y)][i32(pos.x)])
 }
 
 Camera :: struct {
@@ -174,8 +266,7 @@ place_building :: proc(k : BuildingKind, p : v2) {
 
     building_grid_pos := grid_position(building.pos, tile_size)
     target_tile := state.world[i32(building_grid_pos.y)][i32(building_grid_pos.x)]
-    placeable := PlaceableTile
-    if placeable[target_tile.kind] {
+    if PlaceableTile[target_tile.kind] {
         append(&state.buildings, building)
     }
 }
@@ -235,7 +326,8 @@ TileKind :: enum {
     Rock,
 }
 
-PlaceableTile :: [TileKind]bool {
+@(rodata)
+PlaceableTile := [TileKind]bool {
     .Grass = true,
     .Water = false,
     .Forest = false,
@@ -246,7 +338,13 @@ Tile :: struct {
     pos : v2,
     kind : TileKind,
     texture : TextureKind,
-    shade: f32
+    shade: f32,
+    et : ^Entity
+}
+
+Entity :: union {
+    Building,
+    Unit,
 }
 
 tile_rect :: proc(t : Tile) -> rect {
@@ -322,13 +420,23 @@ unit_set_target :: proc(u : ^Unit, tgt : v2) {
     u.target = tgt
 }
 
+rect_top :: proc(r : rect) -> f32 { return r.y }
+rect_bot :: proc(r : rect) -> f32 { return r.y + r.height }
+rect_left :: proc(r : rect) -> f32 { return r.x }
+rect_right :: proc(r : rect) -> f32 { return r.x + r.width }
+
+rect_set_top :: proc(r : ^rect, x : f32) { r.y = x }
+rect_set_bot :: proc(r : ^rect, x : f32) { r.y = x - r.height }
+rect_set_left :: proc(r : ^rect, x : f32) { r.x = x }
+rect_set_right :: proc(r : ^rect, x : f32) { r.x = x - r.width }
+
 update_unit :: proc(u : ^Unit) {
     if u.pos != u.target {
         diff := u.target - u.pos
         if rl.Vector2Length(diff) < u.spd {
             u.pos = u.target
         } else {
-            u.pos += rl.Vector2Normalize(diff)*u.spd
+            u.pos += rl.Vector2Normalize(diff)  * u.spd
         }
     }
 }
@@ -359,6 +467,7 @@ InteractState :: enum {
 
 GameState :: struct {
     camera : Camera,
+    alloc : mem.Allocator,
 
     atlas : TextureAtlas,
 
@@ -435,6 +544,8 @@ init_game_state :: proc(alloc := context.allocator) {
         zoom = 1.0,
     }
 
+    state.alloc = alloc
+
     state.selected_building = .Tower
     state.selected_unit = .Orc
 
@@ -464,7 +575,8 @@ init_game_state :: proc(alloc := context.allocator) {
             tile := Tile{
                 kind = kind,
                 shade = 1.0,
-                pos = v2{f32(x), f32(y)} * f32(tile_size)
+                pos = v2{f32(x), f32(y)} * f32(tile_size),
+                et = nil,
             }
 
             switch kind {
@@ -683,6 +795,15 @@ update :: proc() {
     for u in state.units {
         update_unit(u)
     }
+
+    if rl.IsKeyPressed(.R) {
+        a = a_star_world(a_star_start_pos, snap_to_grid(screen_pos_to_world_pos(rl.GetMousePosition()), tile_size) / tile_size)
+        free_all(state.alloc)
+    }
+
+    if rl.IsKeyPressed(.P) {
+        a_star_start_pos = snap_to_grid(screen_pos_to_world_pos(rl.GetMousePosition()), tile_size) / tile_size
+    }
 }
 
 highlight_tile :: proc(pos : v2) {
@@ -850,14 +971,19 @@ draw :: proc() {
         highlight_tile(rl.GetMousePosition())
     }
 
+    // temp - remove
+    draw_a_star_path(a)
+
     draw_gui()
     if state.debug {
         draw_debug_info()
     }
 
-
     rl.EndDrawing()
 }
+
+a : ^AStarNode = nil
+a_star_start_pos : v2 = {0,0}
 
 main :: proc() {
     init_display(false)
@@ -865,6 +991,7 @@ main :: proc() {
 
     init_game_state()
     log(LOG_LEVEL.INFO, "game state initialized")
+    defer free_all(state.alloc)
 
     init_texture_atlas()
     log(LOG_LEVEL.INFO, "texture atlas initialized")
