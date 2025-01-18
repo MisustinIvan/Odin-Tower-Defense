@@ -11,7 +11,7 @@ import "core:container/priority_queue"
 import rl "vendor:raylib"
 
 
-world_size :: 128 
+world_size ::  512
 tile_size :: 64;
 tile_radius :: tile_size/2
 tile_size_offset :: v2{f32(tile_size/2), f32(tile_size/2)}
@@ -22,14 +22,18 @@ default_height :: 600
 v2 :: rl.Vector2
 rect :: rl.Rectangle
 
-AStarNode :: struct {
-    pos : v2,
-    weight : i32,
-    parent : ^AStarNode,
-}
+a_star_world :: proc(start : v2, end : v2) -> []v2 {
 
-a_star_world :: proc(start : v2, end : v2) -> ^AStarNode {
-    visited := make(map[v2]bool, allocator = context.temp_allocator)
+    AStarNode :: struct {
+        pos : v2,
+        weight : i32,
+        parent : ^AStarNode,
+    }
+
+    context.allocator = context.temp_allocator
+    defer(free_all(context.allocator))
+
+    visited := make(map[v2]bool)
     queue : priority_queue.Priority_Queue(^AStarNode)
     priority_queue.init(
         &queue,
@@ -41,12 +45,12 @@ a_star_world :: proc(start : v2, end : v2) -> ^AStarNode {
             q[i] = q[j]
             q[j] = temp
         },
-        allocator = context.temp_allocator
+        capacity = 128
         )
 
     // default state
     {
-        default := new(AStarNode, allocator = state.alloc)
+        default := new(AStarNode)
         default^ = AStarNode{pos = start, weight = 0, parent = nil}
         priority_queue.push(&queue, default)
     }
@@ -54,12 +58,18 @@ a_star_world :: proc(start : v2, end : v2) -> ^AStarNode {
     for priority_queue.len(queue) != 0 {
         current := priority_queue.pop(&queue)
         if current.pos == end {
-            free_all(context.temp_allocator)
             log(.INFO, "SUCCESSFULLY FOUND PATH!")
-            ret_val := new(AStarNode, allocator = state.alloc)
-            ret_val = current
-            // memory leak, as this does not get freed - TODO FIX
-            return ret_val
+            result := make([]v2, current.weight+1, allocator = state.alloc)
+
+            curr_node := current
+            for curr_node.parent != nil {
+                result[curr_node.weight] = curr_node.pos
+                curr_node = curr_node.parent
+            }
+
+            slice.reverse(result)
+
+            return result
         }
 
         @(static) @(rodata)
@@ -80,31 +90,15 @@ a_star_world :: proc(start : v2, end : v2) -> ^AStarNode {
 
         for neighbor, i in neigbors {
             if neighbor.some && PlaceableTile[neighbor.val.kind] {
-                new_state := new(AStarNode, allocator = state.alloc)
+                new_state := new(AStarNode)
                 new_state^ = AStarNode{pos = current.pos + directions[i], weight = current.weight + 1, parent = current}
                 priority_queue.push(&queue, new_state)
             }
         }
     }
 
-    free_all(context.temp_allocator)
     log(.WARN, "NO PATH FOUND")
     return nil
-}
-
-draw_a_star_path :: proc(n : ^AStarNode) {
-    if n == nil {
-        return
-    }
-    n := n
-    for {
-        pos := world_pos_to_screen_pos(n.pos * tile_size)
-        rl.DrawRectangleV(pos, v2{tile_size, tile_size} * state.camera.zoom, rl.RED)
-        if n.parent == nil {
-            return
-        }
-        n = n.parent
-    }
 }
 
 Option :: struct($T : typeid) {
@@ -640,7 +634,7 @@ handle_input :: proc() {
         }
 
         if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-            state.selected_units = []^Unit{}
+            delete(state.selected_units)
             state.dragging = true
             state.drag_start = screen_pos_to_world_pos(rl.GetMousePosition())
             state.drag_end = state.drag_start
@@ -654,7 +648,7 @@ handle_input :: proc() {
             units, _ := slice.filter(state.units[:], proc (u : ^Unit) -> bool {
                 select_rect := pos2rect(state.drag_start, state.drag_end)
                 return rl.CheckCollisionPointRec(u.pos + tile_size_offset, select_rect)
-            })
+            }, allocator = state.alloc)
 
             state.selected_units = units
         }
@@ -665,14 +659,14 @@ handle_input :: proc() {
             clear(&state.buildings)
             clear(&state.units)
             // does this leak memory? - probably
-            state.selected_units = []^Unit{}
+            delete(state.selected_units)
         }
     }
     // interact state toggling
     {
         if rl.IsKeyPressed(rl.KeyboardKey.B) {
             // does this leak memory? - probably
-            state.selected_units = []^Unit{}
+            delete(state.selected_units)
             if state.interact_state != .Building {
                 state.interact_state = .Building
             } else {
@@ -681,7 +675,7 @@ handle_input :: proc() {
         }
         if rl.IsKeyPressed(rl.KeyboardKey.G) {
             // does this leak memory? - probably
-            state.selected_units = []^Unit{}
+            delete(state.selected_units)
             if state.interact_state != .Spawning {
                 state.interact_state = .Spawning
             } else {
@@ -794,15 +788,6 @@ update :: proc() {
     handle_input()
     for u in state.units {
         update_unit(u)
-    }
-
-    if rl.IsKeyPressed(.R) {
-        a = a_star_world(a_star_start_pos, snap_to_grid(screen_pos_to_world_pos(rl.GetMousePosition()), tile_size) / tile_size)
-        free_all(state.alloc)
-    }
-
-    if rl.IsKeyPressed(.P) {
-        a_star_start_pos = snap_to_grid(screen_pos_to_world_pos(rl.GetMousePosition()), tile_size) / tile_size
     }
 }
 
@@ -935,6 +920,12 @@ draw_gui :: proc() {
     free_all(context.temp_allocator)
 }
 
+draw_a_star_path :: proc(path : []v2) {
+    for p in path {
+        rl.DrawRectangleV(world_pos_to_screen_pos(p*tile_size), v2{tile_size, tile_size} * state.camera.zoom, rl.RED)
+    }
+}
+
 draw :: proc() {
     rl.BeginDrawing()
 
@@ -971,9 +962,6 @@ draw :: proc() {
         highlight_tile(rl.GetMousePosition())
     }
 
-    // temp - remove
-    draw_a_star_path(a)
-
     draw_gui()
     if state.debug {
         draw_debug_info()
@@ -981,9 +969,6 @@ draw :: proc() {
 
     rl.EndDrawing()
 }
-
-a : ^AStarNode = nil
-a_star_start_pos : v2 = {0,0}
 
 main :: proc() {
     init_display(false)
