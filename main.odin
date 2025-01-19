@@ -471,9 +471,6 @@ unit_calculate_path :: proc(u : ^Unit) {
     tgt := snap_to_grid(u.target, tile_size)/tile_size
     pos := snap_to_grid(u.pos, tile_size)/tile_size
     path := a_star_world(pos, tgt)
-    log(.INFO, "pos: %v", pos)
-    log(.INFO, "target: %v", tgt)
-    log(.INFO, "path: %v", path)
     u.path = path
     u.path_idx = 0
     if len(path) >= 2 {
