@@ -22,12 +22,24 @@ default_height :: 600
 v2 :: rl.Vector2
 rect :: rl.Rectangle
 
+slice_head :: proc(xs : []$T) -> T {
+    return xs[0]
+}
+
+slice_tail :: proc(xs : []$T) -> T {
+    return xs[len(xs)-1]
+}
+
 a_star_world :: proc(start : v2, end : v2) -> []v2 {
 
     AStarNode :: struct {
         pos : v2,
-        weight : i32,
+        weight : f32,
         parent : ^AStarNode,
+    }
+
+    heuristic :: proc(p1 : v2, p2 : v2) -> f32 {
+        return rl.Vector2Distance(p1, p2)
     }
 
     context.allocator = context.temp_allocator
@@ -56,20 +68,23 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
     }
 
     for priority_queue.len(queue) != 0 {
-        current := priority_queue.pop(&queue)
+        current : ^AStarNode = priority_queue.pop(&queue)
         if current.pos == end {
-            log(.INFO, "SUCCESSFULLY FOUND PATH!")
-            result := make([]v2, current.weight+1, allocator = state.alloc)
+            result := make([dynamic]v2, allocator = state.alloc)
 
+            // if slow, try to get rid of reverse somehow
             curr_node := current
-            for curr_node.parent != nil {
-                result[curr_node.weight] = curr_node.pos
+            for {
+                append(&result, curr_node.pos * tile_size)
                 curr_node = curr_node.parent
+                if curr_node == nil {
+                    break
+                }
             }
 
-            slice.reverse(result)
+            slice.reverse(result[:])
 
-            return result
+            return result[:]
         }
 
         @(static) @(rodata)
@@ -91,13 +106,16 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
         for neighbor, i in neigbors {
             if neighbor.some && PlaceableTile[neighbor.val.kind] {
                 new_state := new(AStarNode)
-                new_state^ = AStarNode{pos = current.pos + directions[i], weight = current.weight + 1, parent = current}
+                new_pos := current.pos + directions[i]
+                if ok := new_pos in visited; ok {
+                    continue
+                }
+                new_state^ = AStarNode{pos = new_pos, weight = current.weight + 1 + heuristic(new_pos, end), parent = current}
                 priority_queue.push(&queue, new_state)
             }
         }
     }
 
-    log(.WARN, "NO PATH FOUND")
     return nil
 }
 
@@ -379,8 +397,10 @@ Unit :: struct {
     health : i32,
     max_health : i32,
     damage : i32,
-    target : v2,
     spd : f32,
+    target : v2,
+    path : []v2,
+    path_idx : i32,
 }
 
 DefaultOrc :: Unit {
@@ -390,6 +410,8 @@ DefaultOrc :: Unit {
     max_health = 10,
     damage = 1,
     spd = 5.0,
+    path = nil,
+    path_idx = 0,
 }
 
 DefaultBerserk :: Unit {
@@ -399,6 +421,8 @@ DefaultBerserk :: Unit {
     max_health = 5,
     damage = 2,
     spd = 10.0,
+    path = nil,
+    path_idx = 0,
 }
 
 unit_rect :: proc(u : ^Unit) -> rect {
@@ -425,12 +449,38 @@ rect_set_left :: proc(r : ^rect, x : f32) { r.x = x }
 rect_set_right :: proc(r : ^rect, x : f32) { r.x = x - r.width }
 
 update_unit :: proc(u : ^Unit) {
-    if u.pos != u.target {
-        diff := u.target - u.pos
+    if u.path != nil {
+        path_node := u.path[u.path_idx]
+        diff := path_node - u.pos
         if rl.Vector2Length(diff) < u.spd {
-            u.pos = u.target
+            u.pos = path_node
+            u.path_idx += 1
+            if u.path_idx >= i32(len(u.path)) {
+                // free the memory
+                delete(u.path)
+                u.path = nil
+                u.path_idx = 0
+            }
         } else {
             u.pos += rl.Vector2Normalize(diff)  * u.spd
+        }
+    }
+}
+
+unit_calculate_path :: proc(u : ^Unit) {
+    tgt := snap_to_grid(u.target, tile_size)/tile_size
+    pos := snap_to_grid(u.pos, tile_size)/tile_size
+    path := a_star_world(pos, tgt)
+    log(.INFO, "pos: %v", pos)
+    log(.INFO, "target: %v", tgt)
+    log(.INFO, "path: %v", path)
+    u.path = path
+    u.path_idx = 0
+    if len(path) >= 2 {
+        diff_1 := rl.Vector2Length(path[0] - u.pos)
+        diff_2 := rl.Vector2Length(path[1] - u.pos)
+        if diff_2 + diff_1 < 2*tile_size {
+            u.path_idx = 1
         }
     }
 }
@@ -442,8 +492,7 @@ place_unit :: proc(k : UnitKind, pos : v2) {
     case .Berserk: unit^ = DefaultBerserk;
     }
 
-    unit.pos = pos
-    unit.target = unit.pos
+    unit.pos = snap_to_grid(pos, tile_size)
 
     unit_grid_pos := grid_position(unit.pos + tile_size_offset, tile_size)
     target_tile := state.world[i32(unit_grid_pos.y)][i32(unit_grid_pos.x)]
@@ -624,17 +673,40 @@ init_display :: proc(fullscreen : bool) {
     rl.ToggleFullscreen()
 }
 
+clear_selected_units :: proc() {
+    delete(state.selected_units)
+    state.selected_units = []^Unit{}
+}
+
 handle_input :: proc() {
     // dragging behavior
     if state.interact_state == .None {
         if rl.IsKeyPressed(rl.KeyboardKey.M) || rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
-            for &u in state.selected_units {
-                unit_set_target(u, screen_pos_to_world_pos(rl.GetMousePosition() - tile_size_offset))
+            if t := world_get(screen_pos_to_world_pos(rl.GetMousePosition())/tile_size); t.some && PlaceableTile[t.val.kind] {
+                if len(state.selected_units) >= 1 {
+                    target := screen_pos_to_world_pos(rl.GetMousePosition())
+                    leader := state.selected_units[0]
+                    unit_set_target(leader, target)
+                    unit_calculate_path(leader)
+                    if len(leader.path) > 0 {
+                        for &u in state.selected_units[1:] {
+                            // just calculate path to start of the point of first unit
+                            unit_set_target(u, leader.path[0])
+                            unit_calculate_path(u)
+                            final_path := make([]v2, len(u.path) + len(leader.path), allocator = state.alloc)
+                            copy(final_path[0:len(u.path)], u.path)
+                            copy(final_path[len(u.path):], leader.path)
+                            delete(u.path)
+                            u.target = target
+                            u.path = final_path
+                        }
+                    }
+                }
             }
         }
 
         if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-            delete(state.selected_units)
+            clear_selected_units()
             state.dragging = true
             state.drag_start = screen_pos_to_world_pos(rl.GetMousePosition())
             state.drag_end = state.drag_start
@@ -658,15 +730,13 @@ handle_input :: proc() {
         if rl.IsKeyPressed(rl.KeyboardKey.R) {
             clear(&state.buildings)
             clear(&state.units)
-            // does this leak memory? - probably
-            delete(state.selected_units)
+            clear_selected_units()
         }
     }
     // interact state toggling
     {
         if rl.IsKeyPressed(rl.KeyboardKey.B) {
-            // does this leak memory? - probably
-            delete(state.selected_units)
+            clear_selected_units()
             if state.interact_state != .Building {
                 state.interact_state = .Building
             } else {
@@ -674,8 +744,7 @@ handle_input :: proc() {
             }
         }
         if rl.IsKeyPressed(rl.KeyboardKey.G) {
-            // does this leak memory? - probably
-            delete(state.selected_units)
+            clear_selected_units()
             if state.interact_state != .Spawning {
                 state.interact_state = .Spawning
             } else {
@@ -739,7 +808,7 @@ handle_input :: proc() {
     {
         if state.interact_state == .Spawning {
             if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-                place_unit(state.selected_unit, screen_pos_to_world_pos(rl.GetMousePosition()) - tile_size_offset)
+                place_unit(state.selected_unit, screen_pos_to_world_pos(rl.GetMousePosition()))
             }
 
             // changing selected unit
@@ -841,6 +910,7 @@ draw_debug_info :: proc() {
         mouse_world_pos := screen_pos_to_world_pos(mouse_pos)
         rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse screen pos: [%f, %f]", mouse_pos.x, mouse_pos.y)), 50, 90, 18, rl.BLACK)
         rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse world pos: [%f, %f]", mouse_world_pos.x, mouse_world_pos.y)), 50, 110, 18, rl.BLACK)
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse tile pos: %v", snap_to_grid(mouse_world_pos, tile_size)/tile_size)), 50, 130, 18, rl.BLACK)
     }
 
     rl.DrawLine(i32(state.camera.screen_size.x/2), 0, i32(state.camera.screen_size.x/2), i32(state.camera.screen_size.y), rl.BLACK)
@@ -848,6 +918,7 @@ draw_debug_info :: proc() {
 
     for u in state.selected_units {
         rl.DrawLineV(world_pos_to_screen_pos(u.pos), world_pos_to_screen_pos(u.target), rl.BLACK)
+        draw_a_star_path(u.path[u.path_idx:])
     }
 
     free_all(context.temp_allocator)
@@ -922,7 +993,7 @@ draw_gui :: proc() {
 
 draw_a_star_path :: proc(path : []v2) {
     for p in path {
-        rl.DrawRectangleV(world_pos_to_screen_pos(p*tile_size), v2{tile_size, tile_size} * state.camera.zoom, rl.RED)
+        rl.DrawRectangleV(world_pos_to_screen_pos(p), v2{tile_size, tile_size} * state.camera.zoom, rl.Color{255,0,0,80})
     }
 }
 
@@ -958,7 +1029,7 @@ draw :: proc() {
         draw_unit(u)
     }
 
-    if state.interact_state == .Building {
+    if state.interact_state == .Building || state.interact_state == .Spawning {
         highlight_tile(rl.GetMousePosition())
     }
 
