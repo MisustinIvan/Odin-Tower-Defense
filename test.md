@@ -19,8 +19,17 @@
 # What does that require
 - it would be nice to have a type like v2 but with ints instead to avoid casting when accessing world -> g2 (grid 2)
 - refactor as many things that live in the world as possible to use the g2 type
+- world uses g2, screen uses v2, because screen stuff is used for rendering with raylib and that uses v2 exclusively
 - clearly separate rendering functions from world functions
 - have clear mappings between the two spaces
+- refactor InteractState into enum union
+    - basically get rid of this mess
+    - ```
+        interact_state : InteractState,
+        dragging : bool,
+        drag_start : v2,
+        drag_end : v2,
+    ```
 
 # Things for help
 - build with more warnings : `odin build . -vet-unused -vet-packages:main -vet-unused-procedures`
