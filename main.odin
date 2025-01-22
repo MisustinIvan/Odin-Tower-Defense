@@ -96,7 +96,7 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
         }
 
         for neighbor, i in neigbors {
-            if neighbor.some && PlaceableTile[neighbor.val.kind] {
+            if neighbor.some && PlaceableTile[neighbor.val.kind] && neighbor.val.et == nil {
                 new_state := new(AStarNode)
                 new_pos := current.pos + directions[i]
                 if ok := new_pos in visited; ok {
@@ -577,7 +577,7 @@ place_unit :: proc(k : UnitKind, p : v2) -> bool {
 
     target_tile := world_get(p)
     if !target_tile.some { return false }
-    if PlaceableTile[target_tile.val.kind] {
+    if PlaceableTile[target_tile.val.kind] && target_tile.val.et == nil {
         append(&state.units, unit)
         return true
     } else {
