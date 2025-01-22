@@ -10,11 +10,10 @@ import "core:math/noise"
 import "core:container/priority_queue"
 import rl "vendor:raylib"
 
-
-world_size ::  512
-tile_size :: 64;
-tile_radius :: tile_size/2
-tile_size_offset :: v2{f32(tile_size/2), f32(tile_size/2)}
+world_size :: 32
+tile_size :: 64.0
+tile_size_offset :: v2{tile_size/2, tile_size/2}
+tile_size_offset_world :: v2{0.5, 0.5}
 fps :: 60
 default_width :: 800
 default_height :: 600
@@ -22,14 +21,7 @@ default_height :: 600
 v2 :: rl.Vector2
 rect :: rl.Rectangle
 
-slice_head :: proc(xs : []$T) -> T {
-    return xs[0]
-}
-
-slice_tail :: proc(xs : []$T) -> T {
-    return xs[len(xs)-1]
-}
-
+// pathfinding
 a_star_world :: proc(start : v2, end : v2) -> []v2 {
 
     AStarNode :: struct {
@@ -75,7 +67,7 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
             // if slow, try to get rid of reverse somehow
             curr_node := current
             for {
-                append(&result, curr_node.pos * tile_size)
+                append(&result, curr_node.pos)
                 curr_node = curr_node.parent
                 if curr_node == nil {
                     break
@@ -119,6 +111,7 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
     return nil
 }
 
+// mimicking rust types
 Option :: struct($T : typeid) {
     val : T,
     some : bool,
@@ -131,18 +124,29 @@ Some :: proc(x : $T) -> Option(T) {
     }
 }
 
-None :: proc($T) -> Option(T) {
+None :: proc($T : typeid) -> Option(T) {
     return Option(T) {
         val = T{},
         some = false,
     }
 }
 
-world_get :: proc(pos : v2) -> Option(Tile) {
-    if i32(pos.x) >= world_size || i32(pos.x) < 0 || i32(pos.y) >= world_size || i32(pos.y) < 0 { return None(Tile{}) }
-    return Some(state.world[i32(pos.y)][i32(pos.x)])
+Unwrap :: proc(x : Option($T)) -> T {
+    if !x.some {
+        log(.INFO, "unwrap none option")
+    }
+    return x.val
 }
 
+Apply :: proc(x : Option($T), f : proc(T)) {
+    if !x.some {
+        return
+    } else {
+        f(x.val)
+    }
+}
+
+// camera for rendering world
 Camera :: struct {
     fps : i32,
     pos : v2,
@@ -150,148 +154,45 @@ Camera :: struct {
     screen_size : v2,
 }
 
-screen_pos_to_world_pos :: proc(pos : v2) -> v2 {
-    screen_center := state.camera.screen_size/2
-    lc := state.camera.pos - (screen_center / state.camera.zoom)
-    return lc + (pos / state.camera.zoom)
+// utility function to highlight hovered tile
+highlight_tile :: proc(pos : v2) {
+    world_pos := snap_to_grid(screen_pos_to_world_pos(pos), 1.0)
+    rl.DrawRectangleV(world_pos_to_screen_pos(world_pos), v2{tile_size,tile_size} * state.camera.zoom, rl.Color{220,220,220,120})
 }
 
+// snaps position to a grid
+snap_to_grid :: proc(pos : v2, grid_size : f32) -> v2 {
+    return v2{math.floor(pos.x / grid_size)*grid_size, math.floor(pos.y / grid_size)*grid_size}
+}
+
+normalize_to_grid :: proc(pos : v2, grid_size : f32) -> v2 {
+    return v2{math.floor(pos.x / grid_size), math.floor(pos.y / grid_size)}
+}
+
+// transforms screen coordinates to world coordinates
+screen_pos_to_world_pos :: proc(pos : v2) -> v2 {
+    //                                offset by half screen size        transform to right scale
+    return state.camera.pos + ((pos - state.camera.screen_size / 2) / tile_size / state.camera.zoom)
+}
+
+// transforms world coordinates to screen coordinates
 world_pos_to_screen_pos :: proc(pos : v2) -> v2 {
     screen_center := state.camera.screen_size/2
     diff := pos - state.camera.pos
-    return screen_center + (diff * state.camera.zoom)
+    return screen_center + (diff * state.camera.zoom * tile_size)
 }
 
-cull_pos :: proc(pos : v2) -> bool {
-    min := state.camera.pos - (state.camera.screen_size /  state.camera.zoom  / 2)
-    max := min + (state.camera.screen_size / state.camera.zoom)
-    return pos.x >= min.x && pos.x <= max.x && pos.y >= min.y && pos.y <= max.y
-}
-
-cull_rect_full :: proc(pos : v2, size : v2) -> bool {
-    min := state.camera.pos - (state.camera.screen_size /  state.camera.zoom  / 2)
-    max := min + (state.camera.screen_size / state.camera.zoom)
-
-    p1 := pos
-    p2 := p1 + size
-    p3 := p1 + v2{size.x, 0}
-    p4 := p1 + v2{0, size.y}
-
-    return  (p1.x >= min.x && p1.x <= max.x && p1.y >= min.y && p1.y <= max.y) ||
-            (p2.x >= min.x && p2.x <= max.x && p2.y >= min.y && p2.y <= max.y) ||
-            (p3.x >= min.x && p3.x <= max.x && p3.y >= min.y && p3.y <= max.y) ||
-            (p4.x >= min.x && p4.x <= max.x && p4.y >= min.y && p4.y <= max.y)
-}
-
-cull_rect_partial :: proc(pos : v2, size : v2) -> bool {
-    min := state.camera.pos - (state.camera.screen_size / state.camera.zoom / 2)
-    max := min + (state.camera.screen_size / state.camera.zoom)
-
-    return !(pos.x + size.x < min.x || pos.x > max.x || pos.y + size.y < min.y || pos.y > max.y)
-}
-
+// returns the bounds the camera can render stuff in (inclusive)
 cull_camera_bounds :: proc() -> (v2, v2) {
-    y_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.y - (state.camera.screen_size.y / 2 / state.camera.zoom)) / f32(tile_size)))))
+    y_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.y - (state.camera.screen_size.y / 2 / state.camera.zoom / tile_size))))))
     y_max := min(world_size - 1, y_min + i32(math.ceil(state.camera.screen_size.y / tile_size / state.camera.zoom)) + 1)
 
-    x_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.x - (state.camera.screen_size.x / 2 / state.camera.zoom)) / f32(tile_size)))))
+    x_min := min(world_size - 1, max(0, i32(math.floor((state.camera.pos.x - (state.camera.screen_size.x / 2 / state.camera.zoom / tile_size))))))
     x_max := min(world_size - 1, x_min + i32(math.ceil(state.camera.screen_size.x / tile_size / state.camera.zoom)) + 1)
     return v2{f32(x_min), f32(y_min)}, v2{f32(x_max), f32(y_max)}
 }
 
-snap_to_grid :: proc(pos : v2, grid_size : i32) -> v2 {
-    return v2{math.floor(pos.x / f32(grid_size))*f32(grid_size), math.floor(pos.y / f32(grid_size))*f32(grid_size)}
-}
-
-grid_position :: proc(pos : v2, grid_size : i32) -> v2 {
-    return v2{math.floor(pos.x / f32(grid_size)), math.floor(pos.y / f32(grid_size))}
-}
-
-pos2rect :: proc(p1 : v2, p2 : v2) -> rect {
-    min_x := min(p1.x, p2.x)
-    min_y := min(p1.y, p2.y)
-    max_x := max(p1.x, p2.x)
-    max_y := max(p1.y, p2.y)
-
-    return rect{min_x, min_y, max_x - min_x, max_y - min_y}
-}
-
-BuildingKind :: enum {
-    Tower,
-    Wall,
-}
-
-@(rodata)
-BuildingTextureKind := [BuildingKind]TextureKind {
-    .Tower = .TowerTexture,
-    .Wall = .WallTexture,
-
-}
-BuildingKindN :: 2
-
-Building :: struct {
-    kind : BuildingKind,
-    texture : TextureKind,
-    pos : v2,
-    health : i32,
-    max_health : i32,
-}
-
-DefaultTower :: Building {
-    kind = .Tower,
-    texture = .TowerTexture,
-    health = 100,
-    max_health = 100,
-}
-
-DefaultWall :: Building {
-    kind = .Wall,
-    texture = .WallTexture,
-    health = 100,
-    max_health = 100,
-}
-
-draw_building :: proc(b : Building) {
-    pos := world_pos_to_screen_pos(b.pos)
-    texture : rl.Texture2D
-    accent : rl.Color
-
-    if b.health <= 0 {
-        accent = rl.RED
-    } else {
-        accent = rl.WHITE
-    }
-
-    rl.DrawTextureEx(state.atlas.textures[b.texture], pos, 0.0, state.camera.zoom, accent)
-}
-
-// takes a position in world space not snapped
-place_building :: proc(k : BuildingKind, p : v2) {
-    building : Building
-
-    switch k {
-    case .Tower: building = DefaultTower;
-    case .Wall: building = DefaultWall;
-    }
-
-    building.pos = snap_to_grid(p, tile_size)
-
-    building_grid_pos := grid_position(building.pos, tile_size)
-    target_tile := state.world[i32(building_grid_pos.y)][i32(building_grid_pos.x)]
-    if PlaceableTile[target_tile.kind] {
-        append(&state.buildings, building)
-    }
-}
-
-building_kind_string :: proc(k : BuildingKind) -> string {
-    res : string
-    switch k {
-    case .Tower: res = "Tower"
-    case .Wall: res = "Wall"
-    }
-    return res
-}
-
+// all the texture ids
 TextureKind :: enum {
     WaterTexture,
     GrassTexture0,
@@ -306,10 +207,12 @@ TextureKind :: enum {
     BerserkTexture,
 }
 
+// atlas to hold all the textures
 TextureAtlas :: struct {
     textures : [TextureKind]rl.Texture2D
 }
 
+// load textures from disk
 init_texture_atlas :: proc() {
     state.atlas = TextureAtlas{}
     state.atlas.textures[.WaterTexture] = rl.LoadTexture("./water.png")
@@ -325,220 +228,100 @@ init_texture_atlas :: proc() {
     state.atlas.textures[.BerserkTexture] = rl.LoadTexture("./berserk.png")
 }
 
+// free the GPU memory
 deinit_texture_atlas :: proc() {
     for texture in state.atlas.textures {
         rl.UnloadTexture(texture)
     }
 }
 
-TileKind :: enum {
-    Grass,
-    Water,
-    Forest,
-    Rock,
-}
-
-@(rodata)
-PlaceableTile := [TileKind]bool {
-    .Grass = true,
-    .Water = false,
-    .Forest = false,
-    .Rock = false,
-}
-
-Tile :: struct {
-    pos : v2,
-    kind : TileKind,
-    texture : TextureKind,
-    shade: f32,
-    et : ^Entity
-}
-
-Entity :: union {
-    Building,
-    Unit,
-}
-
-tile_rect :: proc(t : Tile) -> rect {
-    return rect {x = t.pos.x, y = t.pos.x, width = f32(tile_size), height = f32(tile_size)}
-}
-
-draw_tile :: proc(t : Tile) {
-    a := u8(255.0 * t.shade)
-    rl.DrawTextureEx(state.atlas.textures[t.texture], world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{a, a, a, 255})
-}
-
-UnitKind :: enum {
-    Orc,
-    Berserk,
-}
-
-@(rodata)
-UnitKindTexture := [UnitKind]TextureKind {
-    .Orc = .OrcTexture,
-    .Berserk = .BerserkTexture,
-}
-
-UnitKindN :: 2
-
-unit_kind_string :: proc(k : UnitKind) -> string {
-    res : string
-    switch k {
-    case .Orc: res = "Orc";
-    case .Berserk: res = "Berserk"
-    }
-    return res
-}
-
-Unit :: struct {
-    kind: UnitKind,
-    texture : TextureKind,
-    pos : v2,
-    health : i32,
-    max_health : i32,
-    damage : i32,
-    spd : f32,
-    target : v2,
-    path : []v2,
-    path_idx : i32,
-}
-
-DefaultOrc :: Unit {
-    kind = .Orc,
-    texture = .OrcTexture,
-    health = 10,
-    max_health = 10,
-    damage = 1,
-    spd = 5.0,
-    path = nil,
-    path_idx = 0,
-}
-
-DefaultBerserk :: Unit {
-    kind = .Berserk,
-    texture = .BerserkTexture,
-    health = 5,
-    max_health = 5,
-    damage = 2,
-    spd = 10.0,
-    path = nil,
-    path_idx = 0,
-}
-
-unit_rect :: proc(u : ^Unit) -> rect {
-    return rect {x = u.pos.x, y = u.pos.y, width = f32(tile_size), height = f32(tile_size)}
-}
-
-draw_unit :: proc(u : ^Unit) {
-    texture : rl.Texture2D
-    rl.DrawTextureEx(state.atlas.textures[u.texture], world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
-}
-
-unit_set_target :: proc(u : ^Unit, tgt : v2) {
-    u.target = tgt
-}
-
-rect_top :: proc(r : rect) -> f32 { return r.y }
-rect_bot :: proc(r : rect) -> f32 { return r.y + r.height }
-rect_left :: proc(r : rect) -> f32 { return r.x }
-rect_right :: proc(r : rect) -> f32 { return r.x + r.width }
-
-rect_set_top :: proc(r : ^rect, x : f32) { r.y = x }
-rect_set_bot :: proc(r : ^rect, x : f32) { r.y = x - r.height }
-rect_set_left :: proc(r : ^rect, x : f32) { r.x = x }
-rect_set_right :: proc(r : ^rect, x : f32) { r.x = x - r.width }
-
-update_unit :: proc(u : ^Unit) {
-    if u.path != nil {
-        path_node := u.path[u.path_idx]
-        diff := path_node - u.pos
-        if rl.Vector2Length(diff) < u.spd {
-            u.pos = path_node
-            u.path_idx += 1
-            if u.path_idx >= i32(len(u.path)) {
-                // free the memory
-                delete(u.path)
-                u.path = nil
-                u.path_idx = 0
-            }
-        } else {
-            u.pos += rl.Vector2Normalize(diff)  * u.spd
-        }
-    }
-}
-
-unit_calculate_path :: proc(u : ^Unit) {
-    tgt := snap_to_grid(u.target, tile_size)/tile_size
-    pos := snap_to_grid(u.pos, tile_size)/tile_size
-    path := a_star_world(pos, tgt)
-    u.path = path
-    u.path_idx = 0
-    if len(path) >= 2 {
-        diff_1 := rl.Vector2Length(path[0] - u.pos)
-        diff_2 := rl.Vector2Length(path[1] - u.pos)
-        if diff_2 + diff_1 < 2*tile_size {
-            u.path_idx = 1
-        }
-    }
-}
-
-place_unit :: proc(k : UnitKind, pos : v2) {
-    unit := new(Unit)
-    switch k {
-    case .Orc: unit^ = DefaultOrc;
-    case .Berserk: unit^ = DefaultBerserk;
-    }
-
-    unit.pos = snap_to_grid(pos, tile_size)
-
-    unit_grid_pos := grid_position(unit.pos + tile_size_offset, tile_size)
-    target_tile := state.world[i32(unit_grid_pos.y)][i32(unit_grid_pos.x)]
-    placeable := PlaceableTile
-    if placeable[target_tile.kind] {
-        append(&state.units, unit)
-    }
-}
-
-InteractState :: enum {
-    None,
-    Building,
-    Spawning,
-}
-
+// state of the whole game
 GameState :: struct {
+    // graphics stuff
     camera : Camera,
-    alloc : mem.Allocator,
-
     atlas : TextureAtlas,
 
-    buildings : [dynamic]Building,
-    selected_building : BuildingKind,
-
-    units : [dynamic]^Unit,
-    selected_unit : UnitKind,
-
+    // state stuff
     world : ^[world_size][world_size]Tile,
-
+    buildings : [dynamic]^Building,
+    units : [dynamic]^Unit,
     interact_state : InteractState,
-    dragging : bool,
-    drag_start : v2,
-    drag_end : v2,
-    selected_units : []^Unit,
 
+    // various utilities
     debug : bool,
+    alloc : mem.Allocator,
 }
 
-DefaultGameState :: proc() -> GameState {
-    return GameState{
-        camera = Camera {
-            pos = v2{0,0},
-            zoom = 1.0,
-        }
+NoneState :: struct {}
+
+ControllingState :: struct {
+    selected : []^Unit,
+}
+
+SpawningState :: struct {
+    selected : UnitKind
+}
+
+BuildingState :: struct {
+    selected : BuildingKind
+}
+
+DraggingState :: struct {
+    start : v2,
+    end : v2,
+}
+
+InteractState :: union {
+    NoneState,
+    ControllingState,
+    DraggingState,
+    SpawningState,
+    BuildingState,
+}
+
+StateGet :: proc($T : typeid) -> Option(T) {
+    #partial switch &s in &state.interact_state {
+    case T: {
+        return Some(s)
+    }
+    }
+    return None(T)
+}
+
+StateSetNone :: proc() {
+    switch &s in &state.interact_state {
+    case NoneState : return
+    case ControllingState : {
+        delete(s.selected, state.alloc)
+        state.interact_state = NoneState{}
+    }
+    case DraggingState, SpawningState, BuildingState : {
+        state.interact_state = NoneState{}
+    }
     }
 }
 
+// world manipulation functions
+world_get :: proc(pos : v2) -> Option(Tile) {
+    if i32(pos.x) >= world_size || i32(pos.x) < 0 || i32(pos.y) >= world_size || i32(pos.y) < 0 { return None(Tile) }
+    return Some(state.world[i32(pos.y)][i32(pos.x)])
+}
+
+world_get_mut :: proc(pos : v2) -> Option(^Tile) {
+    if i32(pos.x) >= world_size || i32(pos.x) < 0 || i32(pos.y) >= world_size || i32(pos.y) < 0 { return None(^Tile) }
+    return Some(&state.world[i32(pos.y)][i32(pos.x)])
+}
+
+world_set :: proc(pos : v2, t : Tile) -> bool {
+    if i32(pos.x) >= world_size || i32(pos.x) < 0 || i32(pos.y) >= world_size || i32(pos.y) < 0 { return false }
+    state.world[i32(pos.y)][i32(pos.x)] = t
+    return true
+}
+
+// global state object
 state : GameState
 
+// some interpolations functions
 smoothstep :: proc(t : f32) -> f32 {
     return t * t * t * (t * (t * 6 - 15) + 10)
 }
@@ -547,6 +330,7 @@ lerp :: proc(a : f32, b : f32, t : f32) -> f32 {
     return a + t * (b - a)
 }
 
+// world generation functions
 generate_perlin_noise :: proc(width, height : i32, scale : f32 = 1.0, alloc := context.allocator) -> []f32 {
     result, err := make([]f32, width*height)
     if err != .None {
@@ -554,7 +338,6 @@ generate_perlin_noise :: proc(width, height : i32, scale : f32 = 1.0, alloc := c
     }
 
     seed := rand.int63()
-
 
     for y in 0..<height {
         for x in 0..<width {
@@ -566,6 +349,7 @@ generate_perlin_noise :: proc(width, height : i32, scale : f32 = 1.0, alloc := c
     return result
 }
 
+// mapping noise to terrain tile
 noise_to_tile :: proc(val : f32) -> TileKind {
     if val <= 0.1 {
         return .Water
@@ -578,28 +362,10 @@ noise_to_tile :: proc(val : f32) -> TileKind {
     }
 }
 
-init_game_state :: proc(alloc := context.allocator) {
-    state.camera = Camera {
-        pos = v2{0,0},
-        zoom = 1.0,
-    }
-
-    state.alloc = alloc
-
-    state.selected_building = .Tower
-    state.selected_unit = .Orc
-
-    state.interact_state = .None
-
-    state.debug = false
-
-    if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
-        state.camera.screen_size = v2{f32(default_width), f32(default_height)}
-    }
-
-
+// world generation
+generate_world :: proc() {
     size := size_of(Tile) * world_size * world_size
-    tiles_ptr, err := mem.alloc(size, mem.DEFAULT_ALIGNMENT, alloc)
+    tiles_ptr, err := mem.alloc(size, mem.DEFAULT_ALIGNMENT, state.alloc)
     if err != mem.Allocator_Error.None {
         log(LOG_LEVEL.PANIC, "Failed to allocate memory for world")
     }
@@ -615,7 +381,7 @@ init_game_state :: proc(alloc := context.allocator) {
             tile := Tile{
                 kind = kind,
                 shade = 1.0,
-                pos = v2{f32(x), f32(y)} * f32(tile_size),
+                pos = v2{f32(x), f32(y)},
                 et = nil,
             }
 
@@ -643,6 +409,15 @@ init_game_state :: proc(alloc := context.allocator) {
     }
 }
 
+// some util functions
+pos2rect :: proc(p1 : v2, p2 : v2) -> rect {
+    min_x := min(p1.x, p2.x)
+    min_y := min(p1.y, p2.y)
+    max_x := max(p1.x, p2.x)
+    max_y := max(p1.y, p2.y)
+    return rect{min_x, min_y, max_x - min_x, max_y - min_y}
+}
+
 map_mut :: proc(xs: []$T, fn: proc(^T) -> $R) -> []R {
     result := make([]R, len(xs))
     for &x, i in xs {
@@ -651,8 +426,246 @@ map_mut :: proc(xs: []$T, fn: proc(^T) -> $R) -> []R {
     return result
 }
 
+// entities
+Entity :: union {
+    Building,
+    Unit,
+}
+
+BuildingKind :: enum {
+    Tower,
+    Wall,
+}
+
+@(rodata)
+BuildingKindString := [BuildingKind]string {
+    .Tower = "Tower",
+    .Wall = "Wall",
+}
+
+@(rodata)
+BuildingTextureKind := [BuildingKind]TextureKind {
+    .Tower = .TowerTexture,
+    .Wall = .WallTexture,
+
+}
+BuildingKindN :: len(BuildingKind)
+
+Building :: struct {
+    kind : BuildingKind,
+    texture : TextureKind,
+    pos : v2,
+    health : i32,
+    max_health : i32,
+}
+
+DefaultTower :: Building {
+    kind = .Tower,
+    texture = .TowerTexture,
+    health = 100,
+    max_health = 100,
+}
+
+DefaultWall :: Building {
+    kind = .Wall,
+    texture = .WallTexture,
+    health = 100,
+    max_health = 100,
+}
+
+// draws a give building on the screen
+draw_building :: proc(b : ^Building) {
+    pos := world_pos_to_screen_pos(b.pos)
+    accent : rl.Color
+    switch {
+    case b.health <= 0: accent = rl.RED
+    case: accent = rl.WHITE
+    }
+    rl.DrawTextureEx(state.atlas.textures[b.texture], pos, 0.0, state.camera.zoom, accent)
+}
+
+// places building in the world if possible at the given world position
+place_building :: proc(k : BuildingKind, p : v2) -> bool {
+    building : ^Building = new(Building, allocator = state.alloc)
+
+    switch k {
+    case .Tower: building^ = DefaultTower;
+    case .Wall: building^ = DefaultWall;
+    }
+
+    building.pos = p
+
+    target_tile := world_get_mut(p)
+    if !target_tile.some { return false }
+    if PlaceableTile[target_tile.val.kind] {
+        append(&state.buildings, building)
+        target_tile.val.et = cast(^Entity)building
+        return true
+    } else {
+        return false
+    }
+}
+
+UnitKind :: enum {
+    Orc,
+    Berserk,
+}
+
+@(rodata)
+UnitKindTexture := [UnitKind]TextureKind {
+    .Orc = .OrcTexture,
+    .Berserk = .BerserkTexture,
+}
+
+UnitKindN :: len(UnitKind)
+
+@(rodata)
+UnitKindString := [UnitKind]string {
+    .Orc = "Orc",
+    .Berserk = "Berserk",
+}
+
+Unit :: struct {
+    kind: UnitKind,
+    texture : TextureKind,
+    pos : v2,
+    health : i32,
+    max_health : i32,
+    damage : i32,
+    spd : f32,
+    move_progress : f32,
+    target : v2,
+    path : []v2,
+    path_idx : i32,
+}
+
+DefaultOrc :: Unit {
+    kind = .Orc,
+    texture = .OrcTexture,
+    health = 10,
+    max_health = 10,
+    damage = 1,
+    spd = 0.05,
+    path = nil,
+    path_idx = 0,
+}
+
+DefaultBerserk :: Unit {
+    kind = .Berserk,
+    texture = .BerserkTexture,
+    health = 5,
+    max_health = 5,
+    damage = 2,
+    spd = 0.1,
+    path = nil,
+    path_idx = 0,
+}
+
+draw_unit :: proc(u : ^Unit) {
+    rl.DrawTextureEx(state.atlas.textures[u.texture], world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
+}
+
+place_unit :: proc(k : UnitKind, p : v2) -> bool {
+    unit := new(Unit, allocator = state.alloc)
+    switch k {
+    case .Orc: unit^ = DefaultOrc;
+    case .Berserk: unit^ = DefaultBerserk;
+    }
+
+    unit.pos = p
+    unit.target = p
+
+    target_tile := world_get(p)
+    if !target_tile.some { return false }
+    if PlaceableTile[target_tile.val.kind] {
+        append(&state.units, unit)
+        return true
+    } else {
+        return false
+    }
+}
+
+unit_set_target :: proc(u : ^Unit, tgt : v2) {
+    u.target = tgt
+}
+
+unit_calculate_path :: proc(u : ^Unit) {
+    path := a_star_world(snap_to_grid(u.pos, 1.0), u.target)
+    u.path = path
+    u.path_idx = 0
+}
+
+update_unit :: proc(u : ^Unit) {
+    if u.path != nil {
+        path_node := u.path[u.path_idx]
+        diff := path_node - u.pos
+        if rl.Vector2Length(diff) < u.spd {
+            u.pos = path_node
+            u.path_idx += 1
+            if u.path_idx >= i32(len(u.path)) {
+                // free the memory
+                delete(u.path)
+                u.path = nil
+                u.path_idx = 0
+            }
+        } else {
+            u.pos += rl.Vector2Normalize(diff)  * u.spd
+        }
+    }
+}
+
+// tile stuff
+TileKind :: enum {
+    Grass,
+    Water,
+    Forest,
+    Rock,
+}
+
+@(rodata)
+PlaceableTile := [TileKind]bool {
+    .Grass = true,
+    .Water = false,
+    .Forest = false,
+    .Rock = false,
+}
+
+Tile :: struct {
+    pos : v2,
+    kind : TileKind,
+    texture : TextureKind,
+    shade: f32,
+    et : ^Entity
+}
+
+draw_tile :: proc(t : Tile) {
+    s := u8(255.0 * t.shade)
+    rl.DrawTextureEx(state.atlas.textures[t.texture], world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{s, s, s, 255})
+}
+
+// game state intialization
+init_game_state :: proc(alloc := context.allocator) {
+    state.camera = Camera {
+        pos = v2{0,0},
+        zoom = 1.0,
+    }
+
+    state.alloc = alloc
+
+    state.interact_state = NoneState{}
+
+    state.debug = false
+
+    if state.camera.screen_size.x == 0.0 && state.camera.screen_size.y == 0.0 {
+        state.camera.screen_size = v2{f32(default_width), f32(default_height)}
+    }
+
+    generate_world()
+}
+
+// display state initialization
 init_display :: proc(fullscreen : bool) {
-    rl.SetConfigFlags(rl.ConfigFlags{rl.ConfigFlag.WINDOW_RESIZABLE})
+    rl.SetConfigFlags(rl.ConfigFlags{rl.ConfigFlag.WINDOW_RESIZABLE, rl.ConfigFlag.VSYNC_HINT})
     rl.InitWindow(default_width, default_height, "RTS?")
     rl.SetTargetFPS(fps)
     if !fullscreen {
@@ -670,23 +683,24 @@ init_display :: proc(fullscreen : bool) {
     rl.ToggleFullscreen()
 }
 
-clear_selected_units :: proc() {
-    delete(state.selected_units)
-    state.selected_units = []^Unit{}
-}
-
+// input handling : TODO refactor
 handle_input :: proc() {
     // dragging behavior
-    if state.interact_state == .None {
+    #partial switch &s in state.interact_state {
+    case ControllingState: {
+        if rl.IsMouseButtonPressed(.LEFT) {
+            StateSetNone()
+        }
         if rl.IsKeyPressed(rl.KeyboardKey.M) || rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
-            if t := world_get(screen_pos_to_world_pos(rl.GetMousePosition())/tile_size); t.some && PlaceableTile[t.val.kind] {
-                if len(state.selected_units) >= 1 {
-                    target := screen_pos_to_world_pos(rl.GetMousePosition())
-                    leader := state.selected_units[0]
+            if t := world_get(screen_pos_to_world_pos(rl.GetMousePosition()));
+            t.some && PlaceableTile[t.val.kind] {
+                if len(s.selected) != 0 {
+                    target := t.val.pos
+                    leader := s.selected[0]
                     unit_set_target(leader, target)
                     unit_calculate_path(leader)
                     if len(leader.path) > 0 {
-                        for &u in state.selected_units[1:] {
+                        for &u in s.selected[1:] {
                             // just calculate path to start of the point of first unit
                             unit_set_target(u, leader.path[0])
                             unit_calculate_path(u)
@@ -701,54 +715,93 @@ handle_input :: proc() {
                 }
             }
         }
-
-        if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-            clear_selected_units()
-            state.dragging = true
-            state.drag_start = screen_pos_to_world_pos(rl.GetMousePosition())
-            state.drag_end = state.drag_start
-        }
-
-        state.drag_end = screen_pos_to_world_pos(rl.GetMousePosition())
+    }
+    case DraggingState: {
+        s.end = screen_pos_to_world_pos(rl.GetMousePosition())
 
         if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
-            state.dragging = false
-
             units, _ := slice.filter(state.units[:], proc (u : ^Unit) -> bool {
-                select_rect := pos2rect(state.drag_start, state.drag_end)
-                return rl.CheckCollisionPointRec(u.pos + tile_size_offset, select_rect)
+                s := StateGet(DraggingState)
+                if !s.some {return false} else {
+                    select_rect := pos2rect(s.val.start, s.val.end)
+                    return rl.CheckCollisionPointRec(u.pos + tile_size_offset_world, select_rect)
+                }
+                return false
             }, allocator = state.alloc)
 
-            state.selected_units = units
+            state.interact_state = ControllingState{
+                selected = units
+            }
+
+            if len(units) == 0 {
+                StateSetNone()
+            }
         }
     }
-    // reset buildings and enemies
-    {
-        if rl.IsKeyPressed(rl.KeyboardKey.R) {
-            clear(&state.buildings)
-            clear(&state.units)
-            clear_selected_units()
+    case NoneState: {
+        if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
+            StateSetNone()
+            state.interact_state = DraggingState{
+                start = screen_pos_to_world_pos(rl.GetMousePosition()),
+                end = screen_pos_to_world_pos(rl.GetMousePosition()),
+            }
         }
-    }
-    // interact state toggling
-    {
         if rl.IsKeyPressed(rl.KeyboardKey.B) {
-            clear_selected_units()
-            if state.interact_state != .Building {
-                state.interact_state = .Building
-            } else {
-                state.interact_state = .None
+            state.interact_state = BuildingState{
+                selected = .Tower
             }
         }
+
         if rl.IsKeyPressed(rl.KeyboardKey.G) {
-            clear_selected_units()
-            if state.interact_state != .Spawning {
-                state.interact_state = .Spawning
-            } else {
-                state.interact_state = .None
+            state.interact_state = SpawningState{
+                selected = .Orc
             }
         }
     }
+    // placing buildings
+    case BuildingState:{
+        if rl.IsMouseButtonPressed(.LEFT) {
+            place_building(s.selected, snap_to_grid(screen_pos_to_world_pos(rl.GetMousePosition()), 1.0))
+        }
+
+        if rl.IsKeyPressed(.B) {
+            StateSetNone()
+        }
+
+        if rl.IsKeyPressed(.G) {
+            state.interact_state = SpawningState{}
+        }
+
+        // changing selected building
+        if rl.IsKeyPressed(.ONE) {
+            s.selected = .Tower
+        } else if rl.IsKeyPressed(.TWO) {
+            s.selected = .Wall
+        }
+    }
+    // spawning units
+    case SpawningState: {
+        if rl.IsMouseButtonPressed(.LEFT) {
+            place_unit(s.selected, snap_to_grid(screen_pos_to_world_pos(rl.GetMousePosition()), 1.0))
+        }
+
+        if rl.IsKeyPressed(.G) {
+            StateSetNone()
+        }
+
+        if rl.IsKeyPressed(.B) {
+            state.interact_state = BuildingState{}
+        }
+
+        // changing selected unit
+        if rl.IsKeyPressed(.ONE) {
+            s.selected = .Orc
+        } else if rl.IsKeyPressed(.TWO) {
+            s.selected = .Berserk
+        }
+    }
+    }
+    // ---------------- state independent keymaps ------------------
     // debug toggling
     {
         if rl.IsKeyPressed(rl.KeyboardKey.GRAVE) {
@@ -784,36 +837,14 @@ handle_input :: proc() {
             diff.x += 1
         }
 
-        state.camera.pos += rl.Vector2Normalize(diff) * 1000 / state.camera.zoom * rl.GetFrameTime()
+        state.camera.pos += rl.Vector2Normalize(diff) * 10 / state.camera.zoom * rl.GetFrameTime()
     }
-    // placing buildings
+    // reset buildings and enemies
     {
-        if state.interact_state == .Building {
-            if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-                place_building(state.selected_building, screen_pos_to_world_pos(rl.GetMousePosition()))
-            }
-
-            // changing selected building
-            if rl.IsKeyPressed(rl.KeyboardKey.ONE) {
-                state.selected_building = .Tower
-            } else if rl.IsKeyPressed(rl.KeyboardKey.TWO) {
-                state.selected_building = .Wall
-            }
-        }
-    }
-    // spawning units
-    {
-        if state.interact_state == .Spawning {
-            if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
-                place_unit(state.selected_unit, screen_pos_to_world_pos(rl.GetMousePosition()))
-            }
-
-            // changing selected unit
-            if rl.IsKeyPressed(rl.KeyboardKey.ONE) {
-                state.selected_unit = .Orc
-            } else if rl.IsKeyPressed(rl.KeyboardKey.TWO) {
-                state.selected_unit = .Berserk
-            }
+        if rl.IsKeyPressed(rl.KeyboardKey.R) {
+            clear(&state.buildings)
+            clear(&state.units)
+            StateSetNone()
         }
     }
     // fullscreen toggle
@@ -841,6 +872,7 @@ handle_input :: proc() {
     }
 }
 
+// game update loop
 update :: proc() {
 
     // update screen dimensions
@@ -857,27 +889,17 @@ update :: proc() {
     }
 }
 
-highlight_tile :: proc(pos : v2) {
-    world_pos := screen_pos_to_world_pos(pos)
-    world_pos_snapped := snap_to_grid(world_pos, tile_size)
-    rl.DrawRectangleV(world_pos_to_screen_pos(world_pos_snapped), v2{tile_size,tile_size} * state.camera.zoom, rl.Color{220,220,220,120})
-}
-
+// draws world grid background
 draw_world_grid :: proc() {
     screen_size := state.camera.screen_size
     top_left := screen_pos_to_world_pos(v2{0, 0})
     bottom_right := screen_pos_to_world_pos(screen_size)
 
-    start_x := math.floor(top_left.x / f32(tile_size))
-    start_y := math.floor(top_left.y / f32(tile_size))
-    end_x := math.ceil(bottom_right.x / f32(tile_size))
-    end_y := math.ceil(bottom_right.y / f32(tile_size))
-
     col1 := rl.Color{180, 180, 180, 255}
     col2 := rl.Color{200, 200, 200, 255}
-    for y in start_y..<end_y {
-        for x in start_x..<end_x {
-            world_pos := v2{f32(x) * f32(tile_size), f32(y) * f32(tile_size)}
+    for y in math.floor(top_left.y)..<math.ceil(bottom_right.y) {
+        for x in math.floor(top_left.x)..<math.ceil(bottom_right.x) {
+            world_pos := v2{f32(x), f32(y)}
 
             screen_pos := world_pos_to_screen_pos(world_pos)
 
@@ -892,10 +914,12 @@ draw_world_grid :: proc() {
     }
 }
 
+// simple debug info
 draw_debug_info :: proc() {
 
     // important
     context.allocator = context.temp_allocator
+    defer free_all(context.allocator)
 
     rl.DrawText(strings.clone_to_cstring(fmt.aprintf("FPS: %d", rl.GetFPS())), 50, 30, 18, rl.BLACK)
 
@@ -907,93 +931,107 @@ draw_debug_info :: proc() {
         mouse_world_pos := screen_pos_to_world_pos(mouse_pos)
         rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse screen pos: [%f, %f]", mouse_pos.x, mouse_pos.y)), 50, 90, 18, rl.BLACK)
         rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse world pos: [%f, %f]", mouse_world_pos.x, mouse_world_pos.y)), 50, 110, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("mouse tile pos: %v", snap_to_grid(mouse_world_pos, tile_size)/tile_size)), 50, 130, 18, rl.BLACK)
     }
 
     rl.DrawLine(i32(state.camera.screen_size.x/2), 0, i32(state.camera.screen_size.x/2), i32(state.camera.screen_size.y), rl.BLACK)
     rl.DrawLine(0, i32(state.camera.screen_size.y/2), i32(state.camera.screen_size.x), i32(state.camera.screen_size.y/2), rl.BLACK)
 
-    for u in state.selected_units {
-        rl.DrawLineV(world_pos_to_screen_pos(u.pos), world_pos_to_screen_pos(u.target), rl.BLACK)
-        draw_a_star_path(u.path[u.path_idx:])
+    #partial switch &s in &state.interact_state {
+    case ControllingState: {
+        for u in s.selected {
+            rl.DrawLineV(world_pos_to_screen_pos(u.pos), world_pos_to_screen_pos(u.target), rl.BLACK)
+            draw_a_star_path(u.path[u.path_idx:])
+        }
     }
-
-    free_all(context.temp_allocator)
+    }
 }
 
+// draw the gui
 draw_gui :: proc() {
 
     // very important step
 
     context.allocator = context.temp_allocator
+    free_all(context.allocator)
 
-    bottom_anchor := i32(state.camera.screen_size.y)
-    bottom_anchor_f := state.camera.screen_size.y
-    // building ui
-    {
-        rl.DrawText("TOGGLE BUILDING MODE WITH <B>", 50, bottom_anchor - 30, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", building_kind_string(state.selected_building))), 50, bottom_anchor - 50, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECT BUILDING <1 ... %d>", BuildingKindN)), 50, bottom_anchor - 70, 18, rl.BLACK)
+    border_padding :: 30
+    gui_pos_y := i32(state.camera.screen_size.y) - border_padding
+    gui_pos_x :: 50
+    texture_height :: 80
+    spacing_height :: 5
+    font_size :: 18
+
+    #partial switch s in state.interact_state {
+    case BuildingState : {
+        rl.DrawText("TOGGLE BUILDING MODE WITH <B>", gui_pos_x, gui_pos_y, font_size, rl.BLACK)
+
+        gui_pos_y -= font_size + spacing_height 
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", BuildingKindString[s.selected])), gui_pos_x, gui_pos_y, font_size, rl.BLACK)
+
+        gui_pos_y -= font_size + spacing_height
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECT BUILDING <1 ... %d>", BuildingKindN)), gui_pos_x, gui_pos_y, font_size, rl.BLACK)
 
         accent := rl.WHITE
-        if state.interact_state != .Building {
+        if _, ok := state.interact_state.(BuildingState); !ok {
             accent = rl.RED
         }
-        rl.DrawTextureV(state.atlas.textures[BuildingTextureKind[state.selected_building]], v2{50, bottom_anchor_f - 80 - f32(tile_size)}, accent)
+        gui_pos_y -= texture_height + spacing_height
+        rl.DrawTextureV(state.atlas.textures[BuildingTextureKind[s.selected]], v2{f32(gui_pos_x), f32(gui_pos_y)}, accent)
     }
-    // spawning ui
-    {
-        spawning_bottom_anchor := bottom_anchor - 80 - tile_size
-        spawning_bottom_anchor_f := f32(bottom_anchor - 80 - tile_size)
-        rl.DrawText("TOGGLE SPAWNING MODE WITH <G>", 50, spawning_bottom_anchor - 30, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", unit_kind_string(state.selected_unit))), 50, spawning_bottom_anchor - 50, 18, rl.BLACK)
-        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED UNIT <1 ... %d>", UnitKindN)), 50, spawning_bottom_anchor - 70, 18, rl.BLACK)
+    case SpawningState : {
+        rl.DrawText("TOGGLE SPAWNING MODE WITH <G>", gui_pos_x, gui_pos_y, font_size, rl.BLACK)
+
+        gui_pos_y -= font_size + spacing_height
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED: %s", UnitKindString[s.selected])), gui_pos_x, gui_pos_y, font_size, rl.BLACK)
+
+        gui_pos_y -= font_size + spacing_height
+        rl.DrawText(strings.clone_to_cstring(fmt.aprintf("SELECTED UNIT <1 ... %d>", UnitKindN)), gui_pos_x, gui_pos_y, font_size, rl.BLACK)
         accent := rl.WHITE
-        if state.interact_state != .Spawning {
+        if _, ok := state.interact_state.(SpawningState); !ok {
             accent = rl.RED
         }
-        rl.DrawTextureV(state.atlas.textures[UnitKindTexture[state.selected_unit]], v2{50, spawning_bottom_anchor_f - 70 - f32(tile_size) - 10}, accent)
+
+        gui_pos_y -= texture_height + spacing_height
+        rl.DrawTextureV(state.atlas.textures[UnitKindTexture[s.selected]], v2{f32(gui_pos_x), f32(gui_pos_y)}, accent)
     }
-    // dragging ui
-    if state.dragging {
-        rect := pos2rect(state.drag_start, state.drag_end)
+    case DraggingState : {
+        rect := pos2rect(s.start, s.end)
         lc := world_pos_to_screen_pos(v2{rect.x, rect.y})
         rect.x = lc.x
         rect.y = lc.y
-        rect.width *= state.camera.zoom
-        rect.height *= state.camera.zoom
+        rect.width *= state.camera.zoom * tile_size
+        rect.height *= state.camera.zoom * tile_size
         rl.DrawRectangleRec(rect, rl.Color{120,120,120,120})
     }
-
-    // selected unit gui
-    for u in state.selected_units {
-        pos := world_pos_to_screen_pos(u.pos)
-        size := i32(f32(tile_size)*state.camera.zoom)
-        rl.DrawRectangleLines(i32(pos.x), i32(pos.y), size, size, rl.BLACK)
-    }
-
-    // selected units gui 2
-    if len(state.selected_units) != 0 {
-        units_bottom_anchor := bottom_anchor - 30
-        units_left_anchor := i32(state.camera.screen_size.x - 100)
-
-        for unit in state.selected_units {
-            rl.DrawText(strings.clone_to_cstring(unit_kind_string(unit.kind)), units_left_anchor, units_bottom_anchor, 18, rl.BLACK)
-            units_bottom_anchor -= 20
+    case ControllingState : {
+        for u in s.selected {
+            pos := world_pos_to_screen_pos(u.pos)
+            size := i32(tile_size*state.camera.zoom)
+            rl.DrawRectangleLines(i32(pos.x), i32(pos.y), size, size, rl.BLACK)
         }
 
-        rl.DrawText("SELECTED UNITS", units_left_anchor, units_bottom_anchor, 18, rl.BLACK)
-    }
+        if len(s.selected) != 0 {
+            gui_pos_x := i32(state.camera.screen_size.x - 200)
 
-    free_all(context.temp_allocator)
+            for u in s.selected {
+                rl.DrawText(strings.clone_to_cstring(UnitKindString[u.kind]), gui_pos_x, gui_pos_y, font_size, rl.BLACK)
+                gui_pos_y -= font_size + spacing_height
+            }
+
+            rl.DrawText("SELECTED UNITS", gui_pos_x, gui_pos_y, font_size, rl.BLACK)
+        }
+    }
+    }
 }
 
+// draws the path
 draw_a_star_path :: proc(path : []v2) {
     for p in path {
         rl.DrawRectangleV(world_pos_to_screen_pos(p), v2{tile_size, tile_size} * state.camera.zoom, rl.Color{255,0,0,80})
     }
 }
 
+// draw the whole world and ui
 draw :: proc() {
     rl.BeginDrawing()
 
@@ -1026,8 +1064,8 @@ draw :: proc() {
         draw_unit(u)
     }
 
-    if state.interact_state == .Building || state.interact_state == .Spawning {
-        highlight_tile(rl.GetMousePosition())
+    #partial switch s in state.interact_state {
+    case BuildingState, SpawningState : highlight_tile(rl.GetMousePosition())
     }
 
     draw_gui()
@@ -1038,6 +1076,7 @@ draw :: proc() {
     rl.EndDrawing()
 }
 
+// main game loop
 main :: proc() {
     init_display(false)
     log(LOG_LEVEL.INFO, "display initialized")
