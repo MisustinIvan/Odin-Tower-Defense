@@ -640,6 +640,7 @@ Tile :: struct {
 
 draw_tile :: proc(t : Tile) {
     s := u8(255.0 * t.shade)
+    if state.debug && t.et != nil { s = 0 }
     rl.DrawTextureEx(state.atlas.textures[t.texture], world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{s, s, s, 255})
 }
 
