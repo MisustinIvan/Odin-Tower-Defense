@@ -533,7 +533,6 @@ Unit :: struct {
     max_health : i32,
     damage : i32,
     spd : f32,
-    move_progress : f32,
     target : v2,
     path : []v2,
     path_idx : i32,
@@ -563,6 +562,10 @@ DefaultBerserk :: Unit {
 
 draw_unit :: proc(u : ^Unit) {
     rl.DrawTextureEx(state.atlas.textures[u.texture], world_pos_to_screen_pos(u.pos), 0.0, state.camera.zoom, rl.WHITE)
+}
+
+unit_rect_world :: proc(u : ^Unit) -> rect {
+    return rect{u.pos.x, u.pos.y, 1.0, 1.0}
 }
 
 place_unit :: proc(k : UnitKind, p : v2) -> bool {
@@ -620,6 +623,14 @@ TileKind :: enum {
     Water,
     Forest,
     Rock,
+}
+
+@(rodata)
+TileKindString := [TileKind]string {
+    .Rock = "Rock",
+    .Forest = "Forest",
+    .Water = "Water",
+    .Grass = "Grass",
 }
 
 @(rodata)
@@ -840,7 +851,7 @@ handle_input :: proc() {
 
         state.camera.pos += rl.Vector2Normalize(diff) * 10 / state.camera.zoom * rl.GetFrameTime()
     }
-    // reset buildings and enemies
+    // reset buildings and units
     {
         if rl.IsKeyPressed(rl.KeyboardKey.R) {
             clear(&state.buildings)
@@ -936,6 +947,17 @@ draw_debug_info :: proc() {
 
     rl.DrawLine(i32(state.camera.screen_size.x/2), 0, i32(state.camera.screen_size.x/2), i32(state.camera.screen_size.y), rl.BLACK)
     rl.DrawLine(0, i32(state.camera.screen_size.y/2), i32(state.camera.screen_size.x), i32(state.camera.screen_size.y/2), rl.BLACK)
+
+    // unit info hover
+    {
+        for unit in state.units {
+            mouse_pos := screen_pos_to_world_pos(rl.GetMousePosition())
+            if rl.CheckCollisionPointRec(mouse_pos, unit_rect_world(unit)) {
+                rl.DrawText(strings.clone_to_cstring(fmt.aprintf("unit kind : %s", UnitKindString[unit.kind])), i32(state.camera.screen_size.x - 150), 50, 18, rl.BLACK)
+                break
+            }
+        }
+    }
 
     #partial switch &s in &state.interact_state {
     case ControllingState: {
