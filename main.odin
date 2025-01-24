@@ -22,7 +22,7 @@ v2 :: rl.Vector2
 rect :: rl.Rectangle
 
 // pathfinding
-a_star_world :: proc(start : v2, end : v2) -> []v2 {
+a_star_world :: proc(start : v2, end : v2, u : ^Unit = nil) -> []v2 {
 
     AStarNode :: struct {
         pos : v2,
@@ -98,7 +98,7 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
         }
 
         for neighbor, i in neigbors {
-            if neighbor.some && PlaceableTile[neighbor.val.kind] && neighbor.val.entity == nil {
+            if neighbor.some && PlaceableTile[neighbor.val.kind] && (neighbor.val.entity == nil || neighbor.val.entity == cast(^Entity)u) {
                 new_state := new(AStarNode)
                 new_pos := current.pos + directions[i]
                 if ok := new_pos in visited; ok {
@@ -605,7 +605,7 @@ unit_set_target :: proc(u : ^Unit, tgt : v2) {
 }
 
 unit_calculate_path :: proc(u : ^Unit) {
-    path := a_star_world(snap_to_grid(u.pos, 1.0), u.target)
+    path := a_star_world(snap_to_grid(u.pos, 1.0), u.target, u)
     if u.path != nil && len(u.path) != 0 {
         delete(u.path)
     }
