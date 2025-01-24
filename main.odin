@@ -67,7 +67,9 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
             // if slow, try to get rid of reverse somehow
             curr_node := current
             for {
-                append(&result, curr_node.pos)
+                if curr_node.pos != start {
+                    append(&result, curr_node.pos)
+                }
                 curr_node = curr_node.parent
                 if curr_node == nil {
                     break
@@ -536,6 +538,7 @@ Unit :: struct {
     target : v2,
     path : []v2,
     path_idx : i32,
+    tile : ^Tile,
 }
 
 DefaultOrc :: Unit {
@@ -578,14 +581,23 @@ place_unit :: proc(k : UnitKind, p : v2) -> bool {
     unit.pos = p
     unit.target = p
 
-    target_tile := world_get(p)
+    target_tile := world_get_mut(p)
     if !target_tile.some { return false }
     if PlaceableTile[target_tile.val.kind] && target_tile.val.entity == nil {
+        unit_set_tile(unit, target_tile.val)
         append(&state.units, unit)
         return true
     } else {
         return false
     }
+}
+
+unit_set_tile :: proc(u : ^Unit, t : ^Tile) {
+    if u.tile != nil {
+        u.tile.entity = nil
+    }
+    u.tile = t
+    t.entity = cast(^Entity)u
 }
 
 unit_set_target :: proc(u : ^Unit, tgt : v2) {
@@ -596,6 +608,9 @@ unit_calculate_path :: proc(u : ^Unit) {
     path := a_star_world(snap_to_grid(u.pos, 1.0), u.target)
     u.path = path
     u.path_idx = 0
+    if u.path != nil && len(u.path) != 0 {
+        unit_set_tile(u, world_get_mut(u.path[0]).val)
+    }
 }
 
 update_unit :: proc(u : ^Unit) {
@@ -610,6 +625,16 @@ update_unit :: proc(u : ^Unit) {
                 delete(u.path)
                 u.path = nil
                 u.path_idx = 0
+                return
+            }
+
+            next_tile := world_get_mut(u.path[u.path_idx]).val
+            // check if next tile reserved
+            if next_tile.entity == nil {
+                unit_set_tile(u, world_get_mut(u.path[u.path_idx]).val)
+            } else {
+                unit_set_tile(u, world_get_mut(u.pos).val)
+                unit_calculate_path(u)
             }
         } else {
             u.pos += rl.Vector2Normalize(diff)  * u.spd
@@ -706,23 +731,20 @@ handle_input :: proc() {
         if rl.IsKeyPressed(rl.KeyboardKey.M) || rl.IsMouseButtonPressed(rl.MouseButton.RIGHT) {
             if t := world_get(screen_pos_to_world_pos(rl.GetMousePosition()));
             t.some && PlaceableTile[t.val.kind] {
-                if len(s.selected) != 0 {
-                    target := t.val.pos
-                    leader := s.selected[0]
-                    unit_set_target(leader, target)
-                    unit_calculate_path(leader)
-                    if len(leader.path) > 0 {
-                        for &u in s.selected[1:] {
-                            // just calculate path to start of the point of first unit
-                            unit_set_target(u, leader.path[0])
-                            unit_calculate_path(u)
-                            final_path := make([]v2, len(u.path) + len(leader.path), allocator = state.alloc)
-                            copy(final_path[0:len(u.path)], u.path)
-                            copy(final_path[len(u.path):], leader.path)
-                            delete(u.path)
-                            u.target = target
-                            u.path = final_path
+                target := t.val.pos
+                for &u in s.selected {
+                    unit_set_target(u, target)
+                    unit_calculate_path(u)
+                }
+                for &u in s.selected {
+                    if u.path == nil {
+                        for &u in s.selected {
+                            if u.path == nil {
+                                unit_set_target(u, target)
+                                unit_calculate_path(u)
+                            }
                         }
+                        break
                     }
                 }
             }
