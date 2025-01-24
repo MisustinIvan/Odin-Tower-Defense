@@ -499,7 +499,7 @@ place_building :: proc(k : BuildingKind, p : v2) -> bool {
 
     target_tile := world_get_mut(p)
     if !target_tile.some { return false }
-    if PlaceableTile[target_tile.val.kind] {
+    if PlaceableTile[target_tile.val.kind] && target_tile.val.entity == nil {
         append(&state.buildings, building)
         target_tile.val.entity = cast(^Entity)building
         return true
