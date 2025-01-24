@@ -606,6 +606,9 @@ unit_set_target :: proc(u : ^Unit, tgt : v2) {
 
 unit_calculate_path :: proc(u : ^Unit) {
     path := a_star_world(snap_to_grid(u.pos, 1.0), u.target)
+    if u.path != nil && len(u.path) != 0 {
+        delete(u.path)
+    }
     u.path = path
     u.path_idx = 0
     if u.path != nil && len(u.path) != 0 {
