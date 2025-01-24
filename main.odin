@@ -96,7 +96,7 @@ a_star_world :: proc(start : v2, end : v2) -> []v2 {
         }
 
         for neighbor, i in neigbors {
-            if neighbor.some && PlaceableTile[neighbor.val.kind] && neighbor.val.et == nil {
+            if neighbor.some && PlaceableTile[neighbor.val.kind] && neighbor.val.entity == nil {
                 new_state := new(AStarNode)
                 new_pos := current.pos + directions[i]
                 if ok := new_pos in visited; ok {
@@ -382,7 +382,7 @@ generate_world :: proc() {
                 kind = kind,
                 shade = 1.0,
                 pos = v2{f32(x), f32(y)},
-                et = nil,
+                entity = nil,
             }
 
             switch kind {
@@ -580,7 +580,7 @@ place_unit :: proc(k : UnitKind, p : v2) -> bool {
 
     target_tile := world_get(p)
     if !target_tile.some { return false }
-    if PlaceableTile[target_tile.val.kind] && target_tile.val.et == nil {
+    if PlaceableTile[target_tile.val.kind] && target_tile.val.entity == nil {
         append(&state.units, unit)
         return true
     } else {
@@ -646,12 +646,12 @@ Tile :: struct {
     kind : TileKind,
     texture : TextureKind,
     shade: f32,
-    et : ^Entity
+    entity : ^Entity
 }
 
 draw_tile :: proc(t : Tile) {
     s := u8(255.0 * t.shade)
-    if state.debug && t.et != nil { s = 0 }
+    if state.debug && t.entity != nil { s = 0 }
     rl.DrawTextureEx(state.atlas.textures[t.texture], world_pos_to_screen_pos(t.pos), 0.0, state.camera.zoom, rl.Color{s, s, s, 255})
 }
 
