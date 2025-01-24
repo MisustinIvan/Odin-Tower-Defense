@@ -499,7 +499,7 @@ place_building :: proc(k : BuildingKind, p : v2) -> bool {
     if !target_tile.some { return false }
     if PlaceableTile[target_tile.val.kind] {
         append(&state.buildings, building)
-        target_tile.val.et = cast(^Entity)building
+        target_tile.val.entity = cast(^Entity)building
         return true
     } else {
         return false
